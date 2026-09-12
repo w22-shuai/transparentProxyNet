@@ -1,19 +1,19 @@
-#include "../memoryPool.h"
+#include "memoryPool.h"
 
-#include <iostream>
+
 
 memoryPool::memoryPool(int n):memoryBlockSize(BlockSize*n),
-nodeSize(OffSet),numberOfNode(BlockSize*n/nodeSize-2)//可以少量剩余空间不使用 但是不能额外占用外部空间
+nodeSize(OffSet),numberOfNode((memoryBlockSize-alignedLinker)/nodeSize-1)//可以少量剩余空间不使用 但是不能额外占用外部空间
 {
     //为了高性能存储
-    void*memoryAddr=malloc(memoryBlockSize);
+    void*memoryAddr=aligned_alloc(16,memoryBlockSize);
     nodePointHeadLinkerHead=new(memoryAddr)nodePointLinker((char*)memoryAddr+alignedLinker,this);
     //定位new
 }
 
 void memoryPool::getNewMemoryBlock(nodePointLinker*point){
     //申请新内存块
-    void*memoryAddr=malloc(memoryBlockSize);
+    void*memoryAddr=aligned_alloc(16,memoryBlockSize);
     //内存对齐存在疑问
     point->nextPoint=new(memoryAddr)nodePointLinker((char*)memoryAddr+alignedLinker,this);
 }
@@ -25,6 +25,7 @@ void memoryPool::freeOldMemoryBlock()  {
         if (point->headPoint.currentNodeNumber==numberOfNode) {
             //释放链表中node个数为512的节点
             assistPoint->nextPoint=point->nextPoint;
+            point->~nodePointLinker();
             free(point);
             point=assistPoint->nextPoint;
         }else {

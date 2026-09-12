@@ -1,16 +1,14 @@
 #pragma once
-#include <cstdlib>
+#include <cstdint>
 #include <iostream>
 
-
-#define BlockSize (1024*1024)
+#define BlockSize (1024LL*1024)
 #define OffSet (2048 + sizeof(headPointAndData::head))
 
 
 
 class memoryPool {
 private:
-
     long long memoryBlockSize;
     int nodeSize;//节点大小
     int numberOfNode;//节点个数
@@ -45,16 +43,15 @@ private:
     struct headPointAndData {
         struct head {
             nodePointLinker *point;
-            __uint64_t padding;//8字节填充
+            uint64_t padding;//8字节填充
         };
         head headData;
         char dataPoint[];//方便强转2048字节
     };//用于定位
     static constexpr int alignedLinker = (sizeof(nodePointLinker) + 15) & ~15;
+    //保证16字节对齐
     nodePointLinker*nodePointHeadLinkerHead;//装第一个节点,这个节点不会被删除
     void getNewMemoryBlock(nodePointLinker *point);
-
-
 
 public:
     memoryPool(int n=1);
