@@ -16,6 +16,8 @@
 
 #include "log.h"
 
+#define originPort 9800
+#define ForeignServerIpaddr "192.168.2.3"
 
 
 namespace beast = boost::beast;         // from <boost/beast.hpp>

@@ -2,16 +2,11 @@
 #include <cstdint>
 #include <iostream>
 
-#define BlockSize (1024LL*1024)
-#define OffSet (2048 + sizeof(headPointAndData::head))
-
-
+static constexpr long long  BlockSize = 1024LL * 1024;
 
 class memoryPool {
 private:
     long long memoryBlockSize;
-    int nodeSize;//节点大小
-    int numberOfNode;//节点个数
     struct nodePoint{//用来存放下一个链表节点
         nodePoint* nextNodePoint;
     };//元素节点
@@ -28,18 +23,26 @@ private:
     struct nodePointLinker{
         nodePointHead headPoint;
         nodePointLinker*nextPoint;
-        nodePointLinker(void*memoryBlockPoint,memoryPool*point):
+        nodePointLinker()=delete;
+        nodePointLinker(void*memoryBlockPoint,int numberOfNode,int nodeSize):
         nextPoint(nullptr),headPoint(memoryBlockPoint) {
-            headPoint.currentNodeNumber=point->numberOfNode;
+            headPoint.currentNodeNumber=numberOfNode;
             nodePoint* assistpoint=(nodePoint*)headPoint.memoryBlockPoint;
-            for (int n=0;n<point->numberOfNode;++n) {
-                assistpoint->nextNodePoint=(nodePoint*)((char*)assistpoint+OffSet);
+            for (int n=0;n<numberOfNode;++n) {
+                assistpoint->nextNodePoint=(nodePoint*)((char*)assistpoint+nodeSize);
                 assistpoint=assistpoint->nextNodePoint;
             }
             assistpoint->nextNodePoint=nullptr;
         };
         ~nodePointLinker() {};
     };//链表
+    struct nodePointLinkerHead {
+        int numberOfNode;
+        int nodeSize;
+        nodePointLinker point;
+        nodePointLinkerHead(void* memoryBlockPoint,int numberOfNode,int nodeSize):numberOfNode(numberOfNode),
+        nodeSize(nodeSize),point(memoryBlockPoint,numberOfNode,nodeSize){}
+    };
     struct headPointAndData {
         struct head {
             nodePointLinker *point;
@@ -48,16 +51,18 @@ private:
         head headData;
         char dataPoint[];//方便强转2048字节
     };//用于定位
-    static constexpr int alignedLinker = (sizeof(nodePointLinker) + 15) & ~15;
+    static constexpr int alignedLinker = (sizeof(nodePointLinkerHead) + 15) & ~15;
     //保证16字节对齐
-    nodePointLinker*nodePointHeadLinkerHead;//装第一个节点,这个节点不会被删除
-    void getNewMemoryBlock(nodePointLinker *point);
+    static constexpr int nodePointHeadLinkerHeadLength=4;
+    nodePointLinkerHead* nodePointHeadLinkerHead[nodePointHeadLinkerHeadLength];//装第一个节点,这个节点不会被删除
+    void getNewMemoryBlock(nodePointLinker *point, nodePointLinkerHead *headPoint);
 
 public:
     memoryPool(int n=1);
     memoryPool(const memoryPool&)=delete;
     memoryPool(memoryPool&&)=delete;
-    void* mallocMemory();
+    ~memoryPool();
+    void* mallocMemory(int memorySize);
     void freeMemory(void *point);
     void freeOldMemoryBlock();
 };

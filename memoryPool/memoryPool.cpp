@@ -2,46 +2,60 @@
 
 
 
-memoryPool::memoryPool(int n):memoryBlockSize(BlockSize*n),
-nodeSize(OffSet),numberOfNode((memoryBlockSize-alignedLinker)/nodeSize-1)//可以少量剩余空间不使用 但是不能额外占用外部空间
+memoryPool::memoryPool(int n):memoryBlockSize(BlockSize*n)
 {
-    //为了高性能存储
-    void*memoryAddr=aligned_alloc(16,memoryBlockSize);
-    nodePointHeadLinkerHead=new(memoryAddr)nodePointLinker((char*)memoryAddr+alignedLinker,this);
-    //定位new
+    //为了高性能存储把头和数据放在一个内存块中,便于缓存利用
+    int beginSize=256;
+    for (int i =0;i<nodePointHeadLinkerHeadLength;++i) {
+        int nodeSize=beginSize+sizeof(headPointAndData::head);//256+头节点大小
+        int numberOfNode=(memoryBlockSize-alignedLinker)/nodeSize-1;
+        void*memoryAddr=aligned_alloc(16,memoryBlockSize);
+        //定位new
+        nodePointHeadLinkerHead[i]=new(memoryAddr)nodePointLinkerHead
+        ((char*)memoryAddr+alignedLinker,numberOfNode,nodeSize);
+        beginSize=beginSize*2;
+    }
+
+
 }
 
-void memoryPool::getNewMemoryBlock(nodePointLinker*point){
+void memoryPool::getNewMemoryBlock(nodePointLinker*point,nodePointLinkerHead*headPoint){
     //申请新内存块
     void*memoryAddr=aligned_alloc(16,memoryBlockSize);
     //内存对齐存在疑问
-    point->nextPoint=new(memoryAddr)nodePointLinker((char*)memoryAddr+alignedLinker,this);
+    point->nextPoint=new(memoryAddr)nodePointLinker((char*)memoryAddr+alignedLinker,
+        headPoint->numberOfNode,headPoint->nodeSize);
 }
 
 void memoryPool::freeOldMemoryBlock()  {
-    nodePointLinker *assistPoint=nodePointHeadLinkerHead;
-    nodePointLinker *point=nodePointHeadLinkerHead->nextPoint;//第一个不能被清除
-    while (point!=nullptr) {
-        if (point->headPoint.currentNodeNumber==numberOfNode) {
-            //释放链表中node个数为512的节点
-            assistPoint->nextPoint=point->nextPoint;
-            point->~nodePointLinker();
-            free(point);
-            point=assistPoint->nextPoint;
-        }else {
-            point=point->nextPoint;
-            assistPoint=assistPoint->nextPoint;
-        }
-    }
+   for (int i =0;i<nodePointHeadLinkerHeadLength;++i) {
+       nodePointLinker *assistPoint=&nodePointHeadLinkerHead[i]->point;
+       nodePointLinker *point=assistPoint->nextPoint;//第一个不能被清除
+       int numbeOfNode=nodePointHeadLinkerHead[i]->numberOfNode;
+       while (point!=nullptr) {
+           if (point->headPoint.currentNodeNumber==numbeOfNode) {
+               //释放链表中node个数为512的节点
+               assistPoint->nextPoint=point->nextPoint;
+               point->~nodePointLinker();
+               free(point);
+               point=assistPoint->nextPoint;
+           }else {
+               point=point->nextPoint;
+               assistPoint=assistPoint->nextPoint;
+           }
+       }
+   }
 }
 
-void* memoryPool::mallocMemory() {
+void* memoryPool::mallocMemory(int memorySize) {
     //返回申请内存的位置
-    nodePointLinker *assistPoint=nodePointHeadLinkerHead;
-    nodePointLinker *point=nodePointHeadLinkerHead;
+    //判定区间从而确定头借点位置
+    int i=(0x3FFA4 >> ((memorySize >> 8) * 2)) & 3;//整型自然截断
+    nodePointLinker *assistPoint=&nodePointHeadLinkerHead[i]->point;
+    nodePointLinker *point=assistPoint;
     while (true) {
         if (assistPoint==nullptr) {
-            getNewMemoryBlock(point);
+            getNewMemoryBlock(point,nodePointHeadLinkerHead[i]);
             assistPoint=point;
         }
         if (assistPoint->headPoint.currentNodeNumber!=0) {
