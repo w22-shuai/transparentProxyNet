@@ -61,7 +61,7 @@ public:
     memoryPool(int n=1);
     memoryPool(const memoryPool&)=delete;
     memoryPool(memoryPool&&)=delete;
-    ~memoryPool();
+    ~memoryPool(){};
     void* mallocMemory(int memorySize);
     void freeMemory(void *point);
     void freeOldMemoryBlock();

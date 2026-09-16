@@ -19,7 +19,8 @@ memoryPool::memoryPool(int n):memoryBlockSize(BlockSize*n)
 
 }
 
-void memoryPool::getNewMemoryBlock(nodePointLinker*point,nodePointLinkerHead*headPoint){
+void memoryPool::getNewMemoryBlock(nodePointLinker*point,nodePointLinkerHead*headPoint)
+{
     //申请新内存块
     void*memoryAddr=aligned_alloc(16,memoryBlockSize);
     //内存对齐存在疑问
@@ -49,7 +50,7 @@ void memoryPool::freeOldMemoryBlock()  {
 
 void* memoryPool::mallocMemory(int memorySize) {
     //返回申请内存的位置
-    //判定区间从而确定头借点位置
+    //判定区间从而确定头节点位置
     int i=(0x3FFA4 >> ((memorySize >> 8) * 2)) & 3;//整型自然截断
     nodePointLinker *assistPoint=&nodePointHeadLinkerHead[i]->point;
     nodePointLinker *point=assistPoint;

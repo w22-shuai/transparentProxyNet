@@ -7,6 +7,7 @@ class worker;
 
 class server {
 private:
+
     int port_;//开放端口
     int threadSize_;//子线程大小
     asio::io_context ioCtx_;//主线程不用使用guard进行保护 主线程会一直有异步任务

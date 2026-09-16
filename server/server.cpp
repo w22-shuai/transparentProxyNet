@@ -29,22 +29,23 @@ checkServerAliveSocket_(ioCtx_),threadSize_(threadSize),
 acceptor_(ioCtx_,tcp::endpoint(tcp::v4(),port_)) {}
 
 void server::checkSeverAlive() {
-    checkServerAliveSocket_.async_send([this]
-        (boost::system::error_code ec,size_t byteHadSend) {
-        if (ec) {
-            LogE("远端服务器出现问题");
-            return;
-        }
-        checkServerAliveSocket_.async_receive([this]
-            (boost::system::error_code ec,size_t byteHadRead) {
-                if (ec) {
-                  LogE("远端服务器出现问题");
-                  return;
-                }
-                startThreadPool();
-                work();
-            });
-    });
+    // checkServerAliveSocket_.async_send([this]
+    //     (boost::system::error_code ec,size_t byteHadSend) {
+    //     if (ec) {
+    //         LogE("远端服务器出现问题");
+    //         return;
+    //     }
+    //     std::shared_ptr<std::array<uint8_t,256>> buffer=std::make_shared<std::array<uint8_t,256>>();
+    //     checkServerAliveSocket_.async_receive(asio::buffer(buffer.get(),buffer->size()),
+    //         [this](boost::system::error_code ec,size_t byteHadRead) {
+    //             if (ec) {
+    //               LogE("远端服务器出现问题");
+    //               return;
+    //             }
+    //             startThreadPool();
+    //             work();
+    //         });
+    // });
 
 }
 

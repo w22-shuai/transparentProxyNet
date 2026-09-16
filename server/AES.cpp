@@ -83,36 +83,59 @@ int FastAesGcmProcessor::decrypt(const uint8_t *packed_data, int packed_len, con
 }
 
 
+// ========================================================================
+// 内存布局约定 (doEncrypt 输出 / doDecrypt 输入):
+//
+//   [ key(32) | iv(12) | ciphertext(dataSize) | tag(16) | padding(8) ]
+//     偏移0       偏移32    偏移44                偏移 44+dataSize        偏移 60+dataSize
+//
+//   总长度 = 32 + 12 + dataSize + 16 + 8 = dataSize + 68
+//
+// 调用 doEncrypt 前，调用方需要把明文提前摆放在 dataPtr + KEYSIZE + GCM_IV_SIZE
+// (即偏移 44) 处，并保证缓冲区总大小 >= dataSize + 68
+// (前面 44 字节留给 key+iv，明文之后还要留 tag(16)+padding(8)=24 字节)。
+// 加密是原地(in==out)进行的：密文直接覆盖明文所在的那段内存，不分配新缓冲区。
+// ========================================================================
 
-std::shared_ptr<std::vector<uint8_t>> FastAesGcmProcessor::doEncrypt
-(void *dataPtr, long long dataSize) {
-    std::shared_ptr<std::vector<uint8_t>> totalData=
-        std::make_shared<std::vector<uint8_t>>(KEYSIZE+IVSIZE+dataSize+TAGSIZE+PADDINGSIZE);
-    const uint8_t* ptr=totalData->data();
-    generate_random_aes_key((char*)ptr);
-    long long encryptDataLength=encrypt(( const uint8_t *)dataPtr,dataSize,
-        ptr,const_cast<uint8_t*>(ptr+KEYSIZE));
-    totalData->resize(encryptDataLength+KEYSIZE);//减少内存,让收发数量上也比较严谨
-    return totalData;
+uint32_t FastAesGcmProcessor::doEncrypt(void *dataPtr, uint32_t dataSize) {
+    if (!dataPtr || dataSize <= 0) return -1;
+
+    uint8_t* base        = static_cast<uint8_t*>(dataPtr);
+    uint8_t* key_ptr      = base;                          // 0，密钥直接写在缓冲区最前面
+    uint8_t* enc_out_ptr  = key_ptr + KEYSIZE;              // 32，IV+密文+tag 从这里开始
+    uint8_t* plain_ptr    = enc_out_ptr + GCM_IV_SIZE;      // 32+12=44，明文必须已摆放在这里
+
+    generate_random_aes_key(reinterpret_cast<char*>(key_ptr));
+
+    int encLen = encrypt(plain_ptr, static_cast<int>(dataSize), key_ptr, enc_out_ptr);
+    if (encLen < 0) {
+        return -1;
+    }
+
+    // padding 追加在 tag 之后，这里默认清零；如果你想在这 8 字节里塞别的东西
+    // (比如校验位、序号)，把下面这行删掉即可，长度计算不受影响。
+    uint8_t* padding_ptr = enc_out_ptr + encLen;            // 32 + encLen
+    memset(padding_ptr, 0, PADDINGSIZE);
+
+    return static_cast<uint32_t>(KEYSIZE) + static_cast<uint32_t>(encLen) + static_cast<uint32_t>(PADDINGSIZE);
 }
 
 
 
+uint32_t FastAesGcmProcessor::doDecrypt(void *dataPtr, uint32_t dataSize) {
+    const uint32_t minLen = static_cast<uint32_t>(KEYSIZE) + GCM_IV_SIZE + GCM_TAG_SIZE + PADDINGSIZE;
+    if (!dataPtr || dataSize < minLen) return -1;
 
-std::shared_ptr<std::vector<uint8_t>> FastAesGcmProcessor::doDecrypt
-(void *dataPtr, long long dataSize)
-{
-    std::shared_ptr<std::vector<uint8_t>> originData=std::make_shared<std::vector<uint8_t>>(dataSize);
-    const uint8_t *key=(const uint8_t *)dataPtr;//初始32位
-    long long decryptDataLength=decrypt((( const uint8_t *)dataPtr)+KEYSIZE,
-        dataSize-KEYSIZE,key,originData->data());
-    if (decryptDataLength<=0) {
-        return nullptr;
+    uint8_t* base       = static_cast<uint8_t*>(dataPtr);
+    uint8_t* key_ptr     = base;                            // 0
+    uint8_t* packed_ptr  = key_ptr + KEYSIZE;               // 32，IV+密文+tag 连续存放
+    int packed_len = static_cast<int>(dataSize - KEYSIZE - PADDINGSIZE);
+
+    // out_plaintext 传 packed_ptr+GCM_IV_SIZE，与内部计算出的 ciphertext_ptr 是同一地址，
+    // 同样是 EVP 支持的原地(in==out)解密，明文直接覆盖密文，不需要额外缓冲区。
+    int plainLen = decrypt(packed_ptr, packed_len, key_ptr, packed_ptr + GCM_IV_SIZE);
+    if (plainLen < 0) {
+        return -1;
     }
-    originData->resize(decryptDataLength);
-    return originData;
-};
-
-
-
-
+    return plainLen;
+}
