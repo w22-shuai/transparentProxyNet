@@ -14,10 +14,10 @@ trafficBusy_(false){
     ikcp_setmtu(kcp_, 1250);
     kcp_->rx_minrto = 10;
     ikcp_nodelay(kcp_, 1, 10, 2, 1);
-
+    kcp_->stream=1;//TODO 流模式疑问
     wifiClientSocketBuffer_=worker_->getCPtrFunc(bufferSize);
     //remoteServerSocketBuffer_=worker_->getCPtrFunc(bufferSize);
-    currentCmdStatus_=cmdStatus::newSession;
+    currentCmdStatus_=cmdStatus::normal;
 }
 
 session::~session() {
@@ -29,7 +29,9 @@ session::~session() {
 void session::start() {
     uint32_t now=worker::getClockMs();
     ikcp_update(kcp_,now);
-    worker_->pushNewSessionToHeap(now,shared_from_this());
+    //这里为什么调用ikcp_update传入时间有点没太懂
+    uint32_t nextTime=ikcp_check(kcp_,now);//算出真正下一次需要驱动的时间,而不是直接用now入堆
+    worker_->pushNewSessionToHeap(nextTime,shared_from_this());
     //TODO 是否使用weak_ptr
     receiveTcpFromWifiCilentMessage();
 }
@@ -39,15 +41,15 @@ void session::closeSession() {
 
 }
 
-void session::timeToWork(uint32_t now) {
+void session::driveSessionTimeClock(uint32_t now) {
     ikcp_update(kcp_,now);
+    updateTimeToWorkerHeap(now);
     //worker通过调用这个回调函数来驱动kcp
 }
 
 void session::updateTimeToWorkerHeap(uint32_t now) {
-    //只要 KCP 的内部状态发生了变化（Update、Input、Send），就调用 ikcp_check
     uint32_t nextTime = ikcp_check(kcp_, now);
-    worker_->updateSessionTimerInHeap(currentHeapNumber_, nextTime);
+    worker_->updateSessionToHeap(nextTime, shared_from_this());
 }
 
 void session::trySendTcpToWifiClientMessage(std::pair<std::shared_ptr<std::array<uint8_t,bufferSize>>,int>&& pair) {
@@ -94,6 +96,7 @@ void session::receiveTcpFromWifiCilentMessage() {
             //TODO 返回值疑问
             //准备进行流量控制查看是否回调receiveTcpFromWifiCilentMessage
             checkTrafficStatus();
+
             //receiveTcpFromWifiCilentMessage(); 由于tcp层自带背压机制,所以这里不直接进行回调
     });
 }
@@ -118,6 +121,7 @@ void session::inputToKcp(void*dataPtr,int len) {
         LogD("KCP拥堵缓解");
         receiveTcpFromWifiCilentMessage();
     }
+
 }
 
 void session::tryToReadFromKcp() {
@@ -126,6 +130,7 @@ void session::tryToReadFromKcp() {
         if (size<=0) {
             break; //没有更多已经组装完整的数据了
         }
+
         std::shared_ptr<std::array<uint8_t,bufferSize>> dataPtr=
             worker_->getSharedPtrFunc(size);
         int len=ikcp_recv(kcp_,(char*)dataPtr->data(),size);
@@ -143,7 +148,7 @@ int session::kcpCallBack(const char *buf, int len, ikcpcb *kcp, void *user) {
     //內令设置
     std::shared_ptr<std::array<uint8_t, bufferSize>> bufferPtr=
     currentSession->worker_->getSharedPtrFunc(len+bufferPaddingSize);
-    char* const  assistPoint=(char*)bufferPtr.get();
+    char* const  assistPoint=(char*)bufferPtr->data();
     cmdHeader* headerPtr=(cmdHeader*)assistPoint;
     headerPtr->sessionId_=currentSession->sessionId_;
     memcpy(assistPoint+cmdHeaderSize,buf,len);
@@ -151,9 +156,6 @@ int session::kcpCallBack(const char *buf, int len, ikcpcb *kcp, void *user) {
     switch (static_cast<int>(currentSession->currentCmdStatus_)) {
         case static_cast<int>(cmdStatus::normal):
             headerPtr->cmd_=cmdStatus::normal;
-            break;
-        case static_cast<int>(cmdStatus::newSession):
-            headerPtr->cmd_=cmdStatus::newSession;
             break;
         case static_cast<int>(cmdStatus::removeSession):
             headerPtr->cmd_=cmdStatus::removeSession;

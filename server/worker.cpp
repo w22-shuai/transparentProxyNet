@@ -12,7 +12,8 @@
 
 worker::worker(int remoteServerPort):remoteServerPort_(remoteServerPort),
 sessionSize(0),ioCtx_(1),workGuard_(asio::make_work_guard(ioCtx_)),
-remoteServerSocker_(ioCtx_.get_executor()),udpReceiveBuffer(nullptr) {}
+remoteServerSocker_(ioCtx_.get_executor()),udpReceiveBuffer(nullptr),
+kcpUpdateTimer_(ioCtx_.get_executor()){}
 
 worker::~worker() {
     //TODO 内存池销毁
@@ -41,7 +42,7 @@ std::array<uint8_t, 16> worker::getSessionId() {
     std::array<uint8_t, 16> id;
     ssize_t n = getrandom(id.data(), id.size(), 0);
     if (n != static_cast<ssize_t>(id.size())) {
-        throw std::runtime_error("随机数生成失败"); // 极罕见,内核熵源异常时才会发生
+        throw std::runtime_error("随机数生成失败");
     }
     return id;
 }
@@ -80,6 +81,35 @@ void worker::sendUdpMessageToRemoteServer() {
     });
 }
 
+
+void worker::rearmKcpUpdateTimer() {
+    if (sessionHeap_.empty()) {
+        return; //没有存活的session,不排定任何定时器,等下一次registerSession时再唤醒
+    }
+    uint32_t now=getClockMs();
+    uint32_t dueAtMs=sessionHeap_.front().dueAtMs;
+    uint32_t delayMs=(dueAtMs>now)?(dueAtMs-now):0;
+    kcpUpdateTimer_.expires_after(std::chrono::milliseconds(delayMs));
+    kcpUpdateTimer_.async_wait([this](const boost::system::error_code &ec) {
+        onKcpUpdateTimer(ec);
+    });
+}
+
+void worker::onKcpUpdateTimer(const boost::system::error_code &ec) {
+    if (ec) {
+        return; //定时器被显式取消(通常是rearmKcpUpdateTimer提前重排),旧的这次直接放弃
+    }
+
+    uint32_t now=getClockMs();
+    //driveSessionTimeClock内部会经由updateTimeToWorkerHeap->updateSessionToHeap
+    //把当前堆顶session原地更新为新的dueAtMs并重新sift,front()会随之改变,循环因此会终止
+    while (!sessionHeap_.empty() && sessionHeap_.front().dueAtMs<=now) {
+        std::shared_ptr<session> sessionPtr=sessionHeap_.front().sessionPtr;
+        sessionPtr->driveSessionTimeClock(now);
+    }
+    rearmKcpUpdateTimer();
+}
+
 void worker::registerSession(std::shared_ptr<session> &sessionPtr) {
     ++sessionSize;
     //使用摘要算法制造16字节ID,存入absl哈希表进行匹配
@@ -88,11 +118,21 @@ void worker::registerSession(std::shared_ptr<session> &sessionPtr) {
     //将当前本地id session键值对存入哈希表,由于面向无连接状态,后续收到udp需要查找
     sessionMap_.emplace(randomId,sessionPtr);
     sessionPtr->start();
+    rearmKcpUpdateTimer();
 }
 
 void worker::pushNewSessionToHeap(uint32_t time,std::shared_ptr<session>&&sessionPtr) {
-
+    sessionHeap_.push(KcpUpdateNode{time,std::move(sessionPtr)});
 }
+
+void worker::updateSessionToHeap(uint32_t newDueAtMs,const std::shared_ptr<session> &sessionPtr) {
+    sessionHeap_.update(sessionPtr->getHeapIndex(),KcpUpdateNode{newDueAtMs,sessionPtr});
+}
+
+void worker::removeSessionFromHeap(const std::shared_ptr<session> &sessionPtr) {
+    sessionHeap_.remove(sessionPtr->getHeapIndex());
+}
+
 
 void worker::receiveUdpMessageFromRemoteServer() {
     remoteServerSocker_.async_receive(asio::buffer(udpReceiveBuffer,bufferSize),
@@ -108,10 +148,6 @@ void worker::receiveUdpMessageFromRemoteServer() {
             std::shared_ptr<session>sessionPtr=result->second;
             switch (static_cast<int>(headerPoint->cmd_)) {
                 case static_cast<int>(session::cmdStatus::normal):
-                    sessionPtr->inputToKcp(udpReceiveBuffer,len);
-                    break;
-                case static_cast<int>(session::cmdStatus::newSession):
-                    sessionPtr->currentCmdStatus_=session::cmdStatus::normal;
                     sessionPtr->inputToKcp(udpReceiveBuffer,len);
                     break;
                 case static_cast<int>(session::cmdStatus::removeSession):

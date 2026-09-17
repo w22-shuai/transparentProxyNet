@@ -33,9 +33,7 @@ private:
     //由于单udp端口无连接性,需要在內令中设置id通过红黑树来遍历查询
 
     void receiveTcpFromWifiCilentMessage();
-
     void checkTrafficStatus();
-
     void sendTcpToWifiClientMessage();
     static int kcpCallBack(const char *buf, int len, ikcpcb *kcp, void *user);
     void tryToReadFromKcp();
@@ -47,9 +45,8 @@ public:
     enum class cmdStatus : uint32_t {
         //保证4字节
         normal=0x00,
-        newSession=0x01,
-        removeSession=0x02,
-        checkSessionAlive=0x03
+        removeSession=0x01,
+        checkSessionAlive=0x02
     };
 
     #pragma pack(push, 1)
@@ -69,8 +66,14 @@ public:
     ~session();
     void start();
     void closeSession();
-    void timeToWork(uint32_t now);
+    void driveSessionTimeClock(uint32_t now);
     void updateTimeToWorkerHeap(uint32_t now);
+
+
+
     void setSessionId(std::array<uint8_t, 16> &sessionId){sessionId_=sessionId;};
     void inputToKcp(void *dataPtr, int len);
+
+    void setHeapIndex(uint32_t idx){currentHeapNumber_=idx;}
+    uint32_t getHeapIndex() const {return currentHeapNumber_;}
 };
