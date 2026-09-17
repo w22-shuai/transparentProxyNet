@@ -6,7 +6,7 @@
 void server::startThreadPool() {
     for (int i=0;i<threadSize_;++i) {
         //远端4个端口
-        workerList_.emplace_back(std::unique_ptr<worker>(new worker(originPort+i)));
+        workerList_.emplace_back(std::unique_ptr<worker>(new worker(originPort+1+i)));
         workerList_[i]->start();
     }
 }
@@ -29,24 +29,17 @@ checkServerAliveSocket_(ioCtx_),threadSize_(threadSize),
 acceptor_(ioCtx_,tcp::endpoint(tcp::v4(),port_)) {}
 
 void server::checkSeverAlive() {
-    // checkServerAliveSocket_.async_send([this]
-    //     (boost::system::error_code ec,size_t byteHadSend) {
-    //     if (ec) {
-    //         LogE("远端服务器出现问题");
-    //         return;
-    //     }
-    //     std::shared_ptr<std::array<uint8_t,256>> buffer=std::make_shared<std::array<uint8_t,256>>();
-    //     checkServerAliveSocket_.async_receive(asio::buffer(buffer.get(),buffer->size()),
-    //         [this](boost::system::error_code ec,size_t byteHadRead) {
-    //             if (ec) {
-    //               LogE("远端服务器出现问题");
-    //               return;
-    //             }
-    //             startThreadPool();
-    //             work();
-    //         });
-    // });
+    asio::ip::address ipAddress = asio::ip::make_address(ForeignServerIpaddr);
+    checkServerAliveSocket_.async_connect(tcp::endpoint(ipAddress, originPort),
+        [this](boost::system::error_code ec) {
+             if (ec) {
+               LogE("远端服务器tcp握手失败");
+               return;
+             }
+             LogD("握手成功!准备启动子线程");
+             startThreadPool();
 
+    });
 }
 
 void server::work() {

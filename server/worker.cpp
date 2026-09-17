@@ -19,12 +19,10 @@ worker::~worker() {
     freeMemory(udpReceiveBuffer);
 }
 
-
-
 void worker::start() {
     threadPtr_=std::make_shared<std::thread>([this]() {
         //初始化内存
-        udpReceiveBuffer=getMemory(2048);//udp mtu2048完全够用
+        udpReceiveBuffer=getMemory(bufferSize);//udp mtu2048完全够用
         asio::ip::address ipAddr=asio::ip::make_address(ForeignServerIpaddr);
          remoteServerSocker_.async_connect(udp::endpoint(ipAddr, remoteServerPort_),
              [this](boost::system::error_code ec) {
@@ -39,7 +37,7 @@ void worker::start() {
     });
 }
 
-std::array<uint8_t, 16>  worker::getSessionId() {
+std::array<uint8_t, 16> worker::getSessionId() {
     std::array<uint8_t, 16> id;
     ssize_t n = getrandom(id.data(), id.size(), 0);
     if (n != static_cast<ssize_t>(id.size())) {
@@ -48,20 +46,25 @@ std::array<uint8_t, 16>  worker::getSessionId() {
     return id;
 }
 
+uint32_t worker::getClockMs() {
+    using namespace std::chrono;
+    static const steady_clock::time_point start=steady_clock::now();
+    return static_cast<uint32_t>(duration_cast<milliseconds>(steady_clock::now()-start).count());
+}
 
-
-
-void worker::sendUdpMessageToRemoteServer(std::pair<std::shared_ptr<std::array<uint8_t,2048>>,int>&&pair) {
-    //流控背压机制,所有sesion都走这里所以做一下留空,再者同一socket不允许同时读写
+void worker::tryTosendUdpMessageToRemoteServer(std::pair<std::shared_ptr<std::array<uint8_t,2048>>,int>&&pair) {
+    //流控背压机制,所有sesion都走这里所以做一下流控,再者同一socket不允许同时读写
+    if (udpSocketWaitForSendDeque_.size()>2048) {
+        return;//不允许总传输数量>2048 否则丢弃
+    }
     bool isEmpty=udpSocketWaitForSendDeque_.empty();
     udpSocketWaitForSendDeque_.push_back(pair);
     if (isEmpty) {
-        dosendUdpMessageToRemoteServer();
+        sendUdpMessageToRemoteServer();
     }
 }
 
-
-void worker::dosendUdpMessageToRemoteServer() {
+void worker::sendUdpMessageToRemoteServer() {
     std::pair<std::shared_ptr<std::array<uint8_t,2048>>,int> &pair=
         udpSocketWaitForSendDeque_.front();
     remoteServerSocker_.async_send(asio::buffer(pair.first.get(),pair.second),
@@ -72,11 +75,10 @@ void worker::dosendUdpMessageToRemoteServer() {
             return;
             }
             if (!udpSocketWaitForSendDeque_.empty()) {
-                dosendUdpMessageToRemoteServer();
+                sendUdpMessageToRemoteServer();
             }
     });
 }
-
 
 void worker::registerSession(std::shared_ptr<session> &sessionPtr) {
     ++sessionSize;
@@ -88,6 +90,9 @@ void worker::registerSession(std::shared_ptr<session> &sessionPtr) {
     sessionPtr->start();
 }
 
+void worker::pushNewSessionToHeap(uint32_t time,std::shared_ptr<session>&&sessionPtr) {
+
+}
 
 void worker::receiveUdpMessageFromRemoteServer() {
     remoteServerSocker_.async_receive(asio::buffer(udpReceiveBuffer,bufferSize),
@@ -129,8 +134,19 @@ void worker::cleanMemoryBlock() {
     memoryPool_.freeOldMemoryBlock();
 }
 
-std::array<uint8_t, 2048>* worker::getMemory(int memorySize) {
+std::array<uint8_t, worker::bufferSize>* worker::getMemory(int memorySize) {
     return (std::array<uint8_t, 2048> *)memoryPool_.mallocMemory(memorySize);
+}
+
+std::array<uint8_t, worker::bufferSize>* worker::getCPtrFunc(int memorySize) {
+    return getMemory(memorySize);
+}
+//定制智能指针析构做法,减少代码量
+std::shared_ptr<std::array<uint8_t, worker::bufferSize>> worker::getSharedPtrFunc(int memorySize) {
+    return std::shared_ptr<std::array<uint8_t,bufferSize>>
+    (getMemory(memorySize),[this](void* dataPoint) {
+       freeMemory(dataPoint);
+    });
 }
 
 

@@ -22,23 +22,30 @@ private:
     static constexpr int bufferSize=2048;
     static constexpr int bufferPaddingSize=128;//用于kcpCallBack函数中
     std::array<uint8_t, bufferSize> *wifiClientSocketBuffer_;
-    std::array<uint8_t, bufferSize> *remoteServerSocketBuffer_;
+    //TODO remoteServerSocketBuffer_是否被需要
+    uint32_t currentHeapNumber_;
 
-    std::deque<std::pair<std::shared_ptr<std::array<uint8_t,2048>>,int>> udpDataWaitForSendDeque;//kcp发送队列
+    std::deque<std::pair<std::shared_ptr<std::array<uint8_t,2048>>,int>> tcpDataWaitForSendDeque_;
 
+    static constexpr int kcpSendWindowHighWaterMark=128;//kcp队列拥堵最大状态
+    bool trafficBusy_;//kcp流量控制receiveTcpFromWifiCilentMessage函数
 
     //由于单udp端口无连接性,需要在內令中设置id通过红黑树来遍历查询
+
     void receiveTcpFromWifiCilentMessage();
-    void tryToSendToKcp(std::pair<std::shared_ptr<std::array<unsigned char, 2048>>, int> &&pair);
-    void sendToKcp();
+
+    void checkTrafficStatus();
+
     void sendTcpToWifiClientMessage();
-    std::array<uint8_t, bufferSize>* getCPtrFunc(int memorySize);
-    std::shared_ptr<std::array<uint8_t, bufferSize>> getSharedPtrFunc(int memorySize);
     static int kcpCallBack(const char *buf, int len, ikcpcb *kcp, void *user);
     void tryToReadFromKcp();
+    void trySendTcpToWifiClientMessage(std::pair<std::shared_ptr<std::array<uint8_t,bufferSize>>,int>&& pair);
+
+
 
 public:
     enum class cmdStatus : uint32_t {
+        //保证4字节
         normal=0x00,
         newSession=0x01,
         removeSession=0x02,
@@ -51,8 +58,8 @@ public:
         cmdStatus cmd_;
     };
     #pragma pack(pop)
-    static constexpr int cmdHeaderSize=20;
-    static_assert(sizeof(cmdHeader) == cmdHeaderSize, "20字节对齐错误");
+    static constexpr int cmdHeaderSize=sizeof(cmdHeader);
+    static_assert(sizeof(cmdHeader) == 20, "20字节对齐错误");
 
 
     cmdStatus currentCmdStatus_;//当前命令状态
@@ -61,9 +68,9 @@ public:
     session(std::unique_ptr<worker> &worker, tcp::socket &&wifiClientSocket);
     ~session();
     void start();
+    void closeSession();
+    void timeToWork(uint32_t now);
+    void updateTimeToWorkerHeap(uint32_t now);
     void setSessionId(std::array<uint8_t, 16> &sessionId){sessionId_=sessionId;};
     void inputToKcp(void *dataPtr, int len);
-
-
-
 };

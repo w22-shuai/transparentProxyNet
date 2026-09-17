@@ -23,6 +23,4 @@ public:
     server(int port=10950,int threadSize_=4);
     void start();
 
-
-
 };
