@@ -3,30 +3,45 @@
 #include "session.h"
 #include "worker.h"
 
+
+server::server(int port, int threadSize):sonThreadStatus_(0),port_(port),ioCtx_(1),
+checkServerAliveSocket_(ioCtx_),threadSize_(threadSize),
+acceptor_(ioCtx_,tcp::endpoint(tcp::v4(),port_)) {}
+
+server::~server() {}
+
 void server::startThreadPool() {
     for (int i=0;i<threadSize_;++i) {
         //远端4个端口
-        workerList_.emplace_back(std::unique_ptr<worker>(new worker(originPort+1+i)));
+        workerList_.emplace_back(std::unique_ptr<worker>(new worker(originPort+1+i,*this)));
         workerList_[i]->start();
     }
+    //子线程准备好才开始监听
+    {
+        std::unique_lock lock(lock_);
+        conditionVariable.wait(lock,[this]() {
+            if (sonThreadStatus_==threadSize_) {
+                return true;
+            }
+             return false;
+        });
+    }
+    //LogD("主线程准备完毕");
+    work();
 }
 
 std::unique_ptr<worker>& server::getThreadWorker() {
     int threadId=0;
-    int sessionSize=0;
-    for (int i=0;i<threadSize_;++i) {
+    int sessionSize=workerList_[0]->sessionSize;
+    for (int i=1;i<threadSize_;++i) {
         //由于每个worker上的session会销毁,为了负载均衡每次都要轮询一下,轮询开销是可以接受的
-        if (workerList_[i]->sessionSize>sessionSize) {
+        if (workerList_[i]->sessionSize<sessionSize) {
             sessionSize=workerList_[i]->sessionSize;
             threadId=i;
         }
     }
     return workerList_[threadId];
 }
-
-server::server(int port, int threadSize):port_(port),ioCtx_(1),
-checkServerAliveSocket_(ioCtx_),threadSize_(threadSize),
-acceptor_(ioCtx_,tcp::endpoint(tcp::v4(),port_)) {}
 
 void server::checkSeverAlive() {
     asio::ip::address ipAddress = asio::ip::make_address(ForeignServerIpaddr);
@@ -38,7 +53,6 @@ void server::checkSeverAlive() {
              }
              LogD("握手成功!准备启动子线程");
              startThreadPool();
-
     });
 }
 
@@ -61,4 +75,5 @@ void server::work() {
 
 void server::start() {
     checkSeverAlive();
+    ioCtx_.run();
 }

@@ -7,6 +7,7 @@
 
 
 
+
 class session:public std::enable_shared_from_this<session>{
 private:
 
@@ -14,11 +15,13 @@ private:
     /*该session属于的worker,为的是调用该线程唯一udp
      socket做准备,由于智能指针的不可复制性,采用引用*/
     worker::SessionId sessionId_;
+
     /*由于我们采用16字节随机值策略
      所以当前会话id和远程会话id可以共用这一个sessionId
     */
     tcp::socket wifiClientSocket_;
     ikcpcb *kcp_;
+    tcp::endpoint endpoint_;
     static constexpr int bufferSize=2048;
     static constexpr int bufferPaddingSize=128;//用于kcpCallBack函数中
     std::array<uint8_t, bufferSize> *wifiClientSocketBuffer_;
@@ -44,20 +47,28 @@ private:
 public:
     enum class cmdStatus : uint32_t {
         //保证4字节
-        normal=0x00,
-        removeSession=0x01,
-        checkSessionAlive=0x02
+        newSession=0x00,
+        normal=0x01,
+        removeSession=0x02,
+        checkSessionAlive=0x03
     };
+    static constexpr int cmdStatusSize=sizeof(cmdStatus);
 
     #pragma pack(push, 1)
-    struct cmdHeader {
-        worker::SessionId sessionId_;
-        cmdStatus cmd_;
+    struct statusAndData {
+        cmdStatus status_;
+        struct ipAndPort {
+            uint32_t ip_;
+            uint16_t port_;
+        };
+        union {
+            ipAndPort ipAndPort_;
+            char assistPoint[1];
+        };
     };
     #pragma pack(pop)
-    static constexpr int cmdHeaderSize=sizeof(cmdHeader);
-    static_assert(sizeof(cmdHeader) == 20, "20字节对齐错误");
-
+    static constexpr int statusAndDataSize=sizeof(statusAndData);
+    static_assert(sizeof(statusAndData) == 10, "6字节对齐错误");
 
     cmdStatus currentCmdStatus_;//当前命令状态
 
@@ -65,15 +76,15 @@ public:
     session(std::unique_ptr<worker> &worker, tcp::socket &&wifiClientSocket);
     ~session();
     void start();
+
+    void sendIpAndportToServer();
+
     void closeSession();
     void driveSessionTimeClock(uint32_t now);
     void updateTimeToWorkerHeap(uint32_t now);
-
-
-
-    void setSessionId(std::array<uint8_t, 16> &sessionId){sessionId_=sessionId;};
+    void setSessionId(worker::SessionId &sessionId){sessionId_=sessionId;};
     void inputToKcp(void *dataPtr, int len);
-
     void setHeapIndex(uint32_t idx){currentHeapNumber_=idx;}
     uint32_t getHeapIndex() const {return currentHeapNumber_;}
+    void setEndPoint(tcp::endpoint &&endpoint){endpoint_=endpoint;}
 };

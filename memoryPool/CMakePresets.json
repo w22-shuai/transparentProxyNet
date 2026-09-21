@@ -3,15 +3,15 @@
   "configurePresets": [
     {
       "name": "debug",
-      "displayName": "Docker",
-      "description": "Docker",
+      "displayName": "WSL",
+      "description": "WSL",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${sourceDirName}",
       "installDir": "${sourceDir}/install/${sourceDirName}",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_C_COMPILER": "gcc",
-        "CMAKE_CXX_COMPILER": "g++"
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_TOOLCHAIN_FILE": "/home/download/vcpkg/scripts/buildsystems/vcpkg.cmake"
       },
       "condition": {
         "type": "equals",
@@ -20,31 +20,17 @@
       },
       "vendor": {
         "jetbrains.com/clion": {
-          "toolchain": "Docker userSpace"
+          "toolchain": "WSL"
         }
       }
     },
     {
       "name": "release",
-      "displayName": "Docker",
-      "description": "Docker",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/${sourceDirName}",
-      "installDir": "${sourceDir}/install/${sourceDirName}",
+      "inherits": "debug",
+      "displayName": "WSL",
+      "description": "WSL",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_C_COMPILER": "gcc",
-        "CMAKE_CXX_COMPILER": "g++"
-      },
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Linux"
-      },
-      "vendor": {
-        "jetbrains.com/clion": {
-          "toolchain": "Docker userSpace"
-        }
+        "CMAKE_BUILD_TYPE": "Release"
       }
     }
   ]

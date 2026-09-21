@@ -3,8 +3,8 @@
   "configurePresets": [
     {
       "name": "debug",
-      "displayName": "Docker",
-      "description": "Docker",
+      "displayName": "WSL",
+      "description": "WSL",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${sourceDirName}",
       "installDir": "${sourceDir}/install/${sourceDirName}",
@@ -20,15 +20,15 @@
       },
       "vendor": {
         "jetbrains.com/clion": {
-          "toolchain": "Docker userSpace"
+          "toolchain": "WSL"
         }
       }
     },
     {
       "name": "release",
       "inherits": "debug",
-      "displayName": "Docker",
-      "description": "Docker",
+      "displayName": "WSL",
+      "description": "WSL",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
