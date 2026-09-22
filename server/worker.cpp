@@ -12,7 +12,11 @@
 worker::worker(int remoteServerPort,server&server):remoteServerPort_(remoteServerPort),
 sessionSize(0),ioCtx_(1),workGuard_(asio::make_work_guard(ioCtx_)),
 remoteServerSocker_(ioCtx_.get_executor()),udpReceiveBuffer(nullptr),
-kcpUpdateTimer_(ioCtx_.get_executor()),server_(server){}
+kcpUpdateTimer_(ioCtx_.get_executor()),server_(server) {
+
+
+
+}
 
 worker::~worker() {
     //TODO 内存池销毁
@@ -111,7 +115,6 @@ void worker::onKcpUpdateTimer(const boost::system::error_code &ec) {
 }
 
 void worker::registerSession(std::shared_ptr<session> &sessionPtr) {
-    ++sessionSize;
     //使用摘要算法制造16字节ID,存入absl哈希表进行匹配
     std::array<uint8_t, 16> randomId=getSessionId();
     sessionPtr->setSessionId(randomId);//设置ID
@@ -161,7 +164,7 @@ void worker::receiveUdpMessageFromRemoteServer() {
         return;
         }
         int len=fastAes.doDecrypt(udpReceiveBuffer,byteHadRead);
-        udpHeader *udpHeaderPoint=(udpHeader*)udpReceiveBuffer;
+        udpHeader *udpHeaderPoint=(udpHeader*)((char*)udpReceiveBuffer+keyAndIvOffSet);
         auto result=sessionMap_.find(udpHeaderPoint->sessionId_);
         if (result != sessionMap_.end()) {
             std::shared_ptr<session>sessionPtr=result->second;

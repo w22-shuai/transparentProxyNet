@@ -32,7 +32,7 @@ public:
     FastAesGcmProcessor(const FastAesGcmProcessor&) = delete;
     FastAesGcmProcessor& operator=(const FastAesGcmProcessor&) = delete;
 
-    uint32_t doEncrypt(void *dataPtr, uint32_t dataSize);
+    uint32_t doEncrypt(void *dataPtr, uint32_t plainLen);
 
     uint32_t doDecrypt(void *dataPtr, uint32_t dataSize);
 };

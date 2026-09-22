@@ -22,9 +22,9 @@ private:
     uint32_t currentHeapNumber_;
 
 
-    std::deque<std::pair<std::shared_ptr<std::array<uint8_t,2048>>,int>> tcpDataWaitForSendDeque_;
+    std::deque<std::pair<std::shared_ptr<std::array<uint8_t,bufferSize>>,int>> tcpDataWaitForSendDeque_;
 
-    void trySendTcpToTargetServerMessage(std::pair<std::shared_ptr<std::array<unsigned char, 2048>>, int> &&pair);
+    void trySendTcpToTargetServerMessage(std::pair<std::shared_ptr<std::array<uint8_t, bufferSize>>, int> &&pair);
 
     void sendTcpToTargetServerMessage();
 
@@ -33,6 +33,9 @@ private:
     void checkTrafficStatus();
 
     void tryToReadFromKcp();
+
+    int handShakeWithtargetServer(tcp::endpoint &ep);
+
     static int kcpCallBack(const char *buf, int len, ikcpcb *kcp, void *user);
 
 public:
@@ -54,7 +57,7 @@ public:
         };
         union {
             ipAndPort ipAndPort_;
-            char assistPoint[1];
+            char assistPoint[0];
         };
     };
 #pragma pack(pop)
@@ -66,7 +69,7 @@ public:
     cmdStatus currentCmdStatus_;//当前命令状态
 
     session()=delete;
-    ~session()=default;
+    ~session();
     session(worker *worker,udp::endpoint& endpoint,tcp::socket&&targetServerTcpSocket);
     void inputToKcp(void *dataPtr, int len);
     void setSessionId(worker::SessionId &sessionId){sessionId_=sessionId;}

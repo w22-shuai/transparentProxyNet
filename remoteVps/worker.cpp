@@ -5,7 +5,11 @@
 
 worker::worker(int port,server&server):port_(port),server_(server),
 ioCtx_(1),homeClientSocket_(ioCtx_.get_executor(),udp::endpoint(udp::v4(),port)),
-kcpUpdateTimer_(ioCtx_.get_executor()){}
+kcpUpdateTimer_(ioCtx_.get_executor()),workGuard_(asio::make_work_guard(ioCtx_)){}
+
+worker::~worker() {
+    freeMemory(udpReceiveBuffer);
+}
 
 
 void worker::start() {
@@ -15,6 +19,7 @@ void worker::start() {
         ++server_.sonThreadStatus_;
         server_.getConditionVariable().notify_one();
         ioCtx_.run();
+        LogD("线程销毁");
     });
 }
 
@@ -29,18 +34,17 @@ void worker::listen() {
     ,[this](boost::system::error_code ec,size_t bytesHadRead) {
         if (ec) {
         LogE("出现错误");
+        listen();
         }
-        LogD("调试信息-->{}",homeClienEndpoint_.port());
         //delieverMessageFromClientHome
         int len=fastAes.doDecrypt(udpReceiveBuffer,bytesHadRead);
-        udpHeader *udpHeaderPoint=(udpHeader*)udpReceiveBuffer;
+        udpHeader *udpHeaderPoint=(udpHeader*)((char*)udpReceiveBuffer+keyAndIvOffSet);
         auto result=sessionMap_.find(udpHeaderPoint->sessionId_);
         if (result != sessionMap_.end()) {
             std::shared_ptr<session>sessionPtr=result->second;
             sessionPtr->inputToKcp(udpHeaderPoint->data_,len-sessionIdSize);
           }else {
               //构造新会话
-
               std::shared_ptr<session>sessionPtr=std::make_shared<session>
               (this,homeClienEndpoint_,tcp::socket(ioCtx_.get_executor()));
               registerSession(udpHeaderPoint->sessionId_,sessionPtr);
@@ -75,7 +79,7 @@ void worker::sendUdpMessageToRemoteServer() {
     std::pair<std::shared_ptr<session>,
     std::pair<std::shared_ptr<std::array<uint8_t,bufferSize>>,int>> &pair=
         udpSocketWaitForSendDeque_.front();
-    homeClientSocket_.async_send_to(asio::buffer(pair.second.first.get(),pair.second.second),
+    homeClientSocket_.async_send_to(asio::buffer(pair.second.first->data(),pair.second.second),
         pair.first.get()->getEndPoint(),
         [this](boost::system::error_code ec,size_t byteHadSend) {
             udpSocketWaitForSendDeque_.pop_front();

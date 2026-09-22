@@ -32,7 +32,7 @@ void server::startThreadPool() {
 
 std::unique_ptr<worker>& server::getThreadWorker() {
     int threadId=0;
-    int sessionSize=workerList_[0]->sessionSize;
+    uint32_t sessionSize=workerList_[0]->sessionSize;
     for (int i=1;i<threadSize_;++i) {
         //由于每个worker上的session会销毁,为了负载均衡每次都要轮询一下,轮询开销是可以接受的
         if (workerList_[i]->sessionSize<sessionSize) {
@@ -65,6 +65,7 @@ void server::work() {
             std::shared_ptr<session> sessionPtr=
                 std::make_shared<session>(workerPtr,std::move(socket));
             //session可以在主线程创建但是后续处理必须依靠子线程,因此Post发往子线程
+            ++workerPtr->sessionSize;//可能会出现线程并发量过大引起的负载不均衡问题,所以移到这里
             asio::post(ioCtx.get_executor(),[&workerPtr,sessionPtr]() mutable{
                     workerPtr->registerSession(sessionPtr);
           });

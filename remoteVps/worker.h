@@ -16,6 +16,7 @@ private:
     server&server_;
     int port_;
     asio::io_context ioCtx_;
+    asio::executor_work_guard<asio::io_context::executor_type> workGuard_;
     memoryPool memoryPool_;
     std::shared_ptr<std::thread> threadPtr_;
     absl::flat_hash_map<std::array<uint8_t,16>,std::shared_ptr<session>> sessionMap_;//worker线程哈希表
@@ -46,33 +47,34 @@ private:
     void rearmKcpUpdateTimer();
     void onKcpUpdateTimer(const boost::system::error_code &ec);
     void registerSession(std::array<unsigned char, 16> &sessionId_, std::shared_ptr<session> &sessionPtr);
-    void freeMemory(void *dataPtr);
+
     void cleanMemoryBlock();
 
 
 public:
     static constexpr int sessionIdSize=16;
+    static  constexpr int keyAndIvOffSet =44;
     typedef std::array<uint8_t, sessionIdSize> SessionId;
     struct udpHeader {
         SessionId sessionId_;
         char data_[];
     };
     worker(int port,server&server);
-    ~worker()=default;
+    ~worker();
 
     void start();
 
     static uint32_t getClockMs();
 
-    std::array<uint8_t,2048> * getMemory(int memorySize);
-    std::array<unsigned char, 2048> * getCPtrFunc(int buffer_size);
+    std::array<uint8_t,bufferSize> * getMemory(int memorySize);
+    std::array<uint8_t, bufferSize> * getCPtrFunc(int buffer_size);
     std::shared_ptr<std::array<uint8_t, worker::bufferSize>> getSharedPtrFunc(int memorySize);
     void pushNewSessionToHeap(uint32_t time, std::shared_ptr<session> &&sessionPtr);
     FastAesGcmProcessor& getFastAesGcm() {
         return fastAes;
     }
     void updateSessionToHeap(uint32_t newDueAtMs, const std::shared_ptr<session> &sessionPtr);
-
+    void freeMemory(void *dataPtr);
     void tryTosendUdpMessageToRemoteServer(std::pair<std::shared_ptr<session>, std::pair<std::shared_ptr<std::array<unsigned char, 2048>>, int>> &&pair);
 
     void sendUdpMessageToRemoteServer();

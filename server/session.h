@@ -24,6 +24,7 @@ private:
     tcp::endpoint endpoint_;
     static constexpr int bufferSize=2048;
     static constexpr int bufferPaddingSize=128;//用于kcpCallBack函数中
+    static constexpr int keyAndIvOffSet =44;
     std::array<uint8_t, bufferSize> *wifiClientSocketBuffer_;
     //TODO remoteServerSocketBuffer_是否被需要
     uint32_t currentHeapNumber_;
@@ -63,7 +64,7 @@ public:
         };
         union {
             ipAndPort ipAndPort_;
-            char assistPoint[1];
+            char assistPoint[0];
         };
     };
     #pragma pack(pop)

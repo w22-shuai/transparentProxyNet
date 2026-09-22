@@ -12,8 +12,6 @@ void server::start() {
     ioCtx_.run();
 }
 
-
-
 void server::startThreadPool() {
     for (int i=0;i<threadSize_;++i) {
         workerList_.emplace_back(std::unique_ptr<worker>(new worker(originPort+1+i,*this)));
@@ -29,7 +27,6 @@ void server::startThreadPool() {
         });
     }
 }
-
 
 void server::checkAliveServer() {
     acceptor_.async_accept(ioCtx_,[this](boost::system::error_code ec,tcp::socket socket) {

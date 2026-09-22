@@ -3,7 +3,9 @@
 #include "worker.h"
 #include "../memoryPool/memoryPool.h"
 
-
+#include <netinet/in.h>
+#include <linux/netfilter_ipv4.h>
+#include <arpa/inet.h>
 
 
 session::session(std::unique_ptr<worker> &worker,tcp::socket &&wifiClientSocket ):
@@ -16,6 +18,7 @@ trafficBusy_(false),currentCmdStatus_(cmdStatus::newSession){
     ikcp_nodelay(kcp_, 1, 10, 2, 1);
     wifiClientSocketBuffer_=worker_->getCPtrFunc(bufferSize);
     //remoteServerSocketBuffer_=worker_->getCPtrFunc(bufferSize);
+
 
 }
 
@@ -31,16 +34,36 @@ void session::start() {
     uint32_t nextTime=ikcp_check(kcp_,now);//算出真正下一次需要驱动的时间,而不是直接用now入堆
     worker_->pushNewSessionToHeap(nextTime,shared_from_this());
     //TODO 是否使用weak_ptr
-    endpoint_=wifiClientSocket_.local_endpoint();
+    sockaddr_in orig_dst{};
+    socklen_t addrlen = sizeof(orig_dst);
+    int fd = wifiClientSocket_.native_handle();
+
+    if (getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, &orig_dst, &addrlen) == 0) {
+        // 将 sockaddr_in 转换为 asio::ip::tcp::endpoint
+        asio::ip::address_v4::bytes_type ip_bytes;
+        std::memcpy(ip_bytes.data(), &orig_dst.sin_addr.s_addr, 4);
+
+        asio::ip::address_v4 addr(ip_bytes);
+        int port = ntohs(orig_dst.sin_port);
+
+        endpoint_ = tcp::endpoint(addr, port);
+
+        LogD("成功获取真实目标: " + endpoint_.address().to_string() + ":" + std::to_string(port));
+    } else {
+        // 如果失败（比如直接连10950端口，没有经过NAT），退回到本地获取
+        perror("getsockopt SO_ORIGINAL_DST failed");
+        endpoint_ = wifiClientSocket_.local_endpoint();
+    }
+
     sendIpAndportToServer();
 }
 
 void session::sendIpAndportToServer() {
     statusAndData statusAndData_;
-    statusAndData_.status_=static_cast<cmdStatus>(htonl(static_cast<int>(cmdStatus::normal)));
+    statusAndData_.status_=static_cast<cmdStatus>(htonl(static_cast<int>(cmdStatus::newSession)));
     statusAndData_.ipAndPort_.ip_ = htonl(endpoint_.address().to_v4().to_uint());
     statusAndData_.ipAndPort_.port_ = htons(endpoint_.port());
-    ikcp_send(kcp_, (const char*)&statusAndData_, sizeof(statusAndDataSize));
+    ikcp_send(kcp_, (const char*)&statusAndData_, statusAndDataSize);
     ikcp_flush(kcp_);
     currentCmdStatus_=cmdStatus::normal;
     receiveTcpFromWifiCilentMessage();
@@ -74,6 +97,7 @@ void session::sendTcpToWifiClientMessage() {
     std::pair<std::shared_ptr<std::array<uint8_t,bufferSize>>,int> &front=
       tcpDataWaitForSendDeque_.front();
     std::shared_ptr<session> self=shared_from_this();
+    LogD("调试信息-->{}",front.second);
     asio::async_write(wifiClientSocket_,
         asio::buffer(((statusAndData*)front.first->data())->assistPoint,front.second-cmdStatusSize),
         [this,self](boost::system::error_code ec,size_t byteHadSend) {
@@ -95,6 +119,7 @@ void session::receiveTcpFromWifiCilentMessage() {
     wifiClientSocket_.async_read_some(
         asio::buffer((char*)wifiClientSocketBuffer_+cmdStatusSize,bufferSize-cmdStatusSize),
         [this,self](boost::system::error_code ec,size_t byteHadRead) {
+            LogD("调试信息-->{}",byteHadRead);
             if (ec) {
                 LogE("出现问题");
                 return;
@@ -104,7 +129,7 @@ void session::receiveTcpFromWifiCilentMessage() {
             }
             statusAndData*point=(statusAndData*)wifiClientSocketBuffer_;
             point->status_=static_cast<cmdStatus>(htonl(static_cast<int>(cmdStatus::normal)));
-            int ret = ikcp_send(kcp_,point->assistPoint, byteHadRead);
+            int ret = ikcp_send(kcp_,(char *)point, byteHadRead+cmdStatusSize);
             ikcp_flush(kcp_);//立即刷新调用kcpCallBack
             //准备进行流量控制查看是否回调receiveTcpFromWifiCilentMessage
             checkTrafficStatus();
@@ -165,12 +190,13 @@ int session::kcpCallBack(const char *buf, int len, ikcpcb *kcp, void *user) {
     //len<1250;
     session* currentSession=(session*)user;
     //內令设置
+    LogD("调试信息-->{}",len);
     std::shared_ptr<std::array<uint8_t, bufferSize>> bufferPtr=
     currentSession->worker_->getSharedPtrFunc(len+bufferPaddingSize);
     char* const  assistPoint=(char*)bufferPtr->data();
-    worker::SessionId* headerPtr=(worker::SessionId*)assistPoint;
+    worker::SessionId* headerPtr=(worker::SessionId*)(assistPoint+keyAndIvOffSet);
     *headerPtr=currentSession->sessionId_;
-    memcpy(assistPoint+worker::sessionIdSize,buf,len);
+    memcpy(assistPoint+keyAndIvOffSet+worker::sessionIdSize,buf,len);
     len=currentSession->worker_->
     getFastAesGcm().doEncrypt(assistPoint,len+worker::sessionIdSize);
     currentSession->worker_->tryTosendUdpMessageToRemoteServer(

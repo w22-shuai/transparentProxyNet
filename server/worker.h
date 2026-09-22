@@ -44,6 +44,7 @@ private:
 
 public:
     static constexpr int sessionIdSize=16;
+    static  constexpr int keyAndIvOffSet =44;
     typedef std::array<uint8_t, sessionIdSize> SessionId;
     std::atomic<uint32_t> sessionSize;//记录当前会话数量,用于server进行负载均衡
     struct udpHeader {
