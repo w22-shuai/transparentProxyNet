@@ -36,10 +36,23 @@ void worker::start() {
              }
             //LogD("子线程准备完毕");
             ++server_.sonThreadStatus_;
+            timeWheel_.operatorFunction_.ctwCallBack_=session::driveSessionTimeClock;
+            timeWheel_.operatorFunction_.rtCallBack_=session::doCloseSession;
+            startTimeWheel();//时间片启动
             server_.getConditionVariable().notify_one();
             receiveUdpMessageFromRemoteServer();
          });
          ioCtx_.run();
+    });
+}
+
+void worker::startTimeWheel() {
+    uint32_t now=getClockMs();
+    uint32_t delayMs=timeWheel<void>::deltaTime_;
+    kcpUpdateTimer_.expires_after(std::chrono::milliseconds(delayMs));
+    kcpUpdateTimer_.async_wait([this](const boost::system::error_code &ec) {
+        timeWheel_.doCurrentTimeWheel();
+        startTimeWheel();
     });
 }
 
@@ -86,72 +99,30 @@ void worker::sendUdpMessageToRemoteServer() {
     });
 }
 
-void worker::rearmKcpUpdateTimer() {
-    if (sessionHeap_.empty()) {
-        return; //没有存活的session,不排定任何定时器,等下一次registerSession时再唤醒
-    }
-    uint32_t now=getClockMs();
-    uint32_t dueAtMs=sessionHeap_.top().dueAtMs;
-    uint32_t delayMs=(dueAtMs>now)?(dueAtMs-now):0;
-    kcpUpdateTimer_.expires_after(std::chrono::milliseconds(delayMs));
-    kcpUpdateTimer_.async_wait([this](const boost::system::error_code &ec) {
-        onKcpUpdateTimer(ec);
-    });
-}
 
-void worker::onKcpUpdateTimer(const boost::system::error_code &ec) {
-    if (ec) {
-        return; //定时器被显式取消(通常是rearmKcpUpdateTimer提前重排),旧的这次直接放弃
-    }
-
-    uint32_t now=getClockMs();
-    //driveSessionTimeClock内部会经由updateTimeToWorkerHeap->updateSessionToHeap
-    //把当前堆顶session原地更新为新的dueAtMs并重新sift,front()会随之改变,循环因此会终止
-    while (!sessionHeap_.empty() && sessionHeap_.top().dueAtMs<=now) {
-        std::shared_ptr<session> sessionPtr=sessionHeap_.top().sessionPtr;
-        sessionPtr->driveSessionTimeClock(now);
-    }
-    rearmKcpUpdateTimer();
-}
-
-void worker::registerSession(std::shared_ptr<session> &sessionPtr) {
+void worker::registerSession(std::unique_ptr<session,sessionDeleter> &sessionPtr) {
     //使用摘要算法制造16字节ID,存入absl哈希表进行匹配
-    std::array<uint8_t, 16> randomId=getSessionId();
-    sessionPtr->setSessionId(randomId);//设置ID
+    std::array<uint8_t, sessionIdSize> randomId=getSessionId();
+    session* Ptr=sessionPtr.get();
+    Ptr->setSessionId(randomId);//设置ID
     //将当前本地id session键值对存入哈希表,由于面向无连接状态,后续收到udp需要查找
-    sessionMap_.emplace(randomId,sessionPtr);
-    uint32_t heapSize=sessionHeap_.size();
-    sessionPtr->start();
-    if (heapSize==0) {//说明才加进去的
-        rearmKcpUpdateTimer();
+    sessionMap_.emplace(randomId,std::move(sessionPtr));
+    Ptr->start();
+}
+
+void worker::sessionDeleter::operator()(session* p)
+{
+    if(p)
+    {
+        p->~session();   // 调析构
     }
-}
-
-void worker::pushNewSessionToHeap(uint32_t time,std::shared_ptr<session>&&sessionPtr) {
-    sessionHeap_.push(KcpUpdateNode{time,std::move(sessionPtr)});
-}
-
-void worker::updateSessionToHeap(uint32_t newDueAtMs,const std::shared_ptr<session> &sessionPtr) {
-    sessionHeap_.update(sessionPtr->getHeapIndex(),KcpUpdateNode{newDueAtMs,sessionPtr});
-}
-
-void worker::KcpUpdateNode::setHeapIndex(uint32_t idx) {
-    sessionPtr->setHeapIndex(idx);
-}
-
-uint32_t worker::KcpUpdateNode::getHeapIndex() const {
-    return sessionPtr->getHeapIndex();
-}
-
-void worker::removeSessionFromHeap(uint32_t index) {
-    sessionHeap_.remove(index);
 }
 
 void worker::removeSessionFromHashMap(SessionId sessionId) {
 
 }
 
-void worker::removeSession(const std::shared_ptr<session> &sessionPtr) {
+void worker::removeSession(session* sessionPtr) {
 
     //sessionMap_.erase();
 }
@@ -167,7 +138,7 @@ void worker::receiveUdpMessageFromRemoteServer() {
         udpHeader *udpHeaderPoint=(udpHeader*)((char*)udpReceiveBuffer+keyAndIvOffSet);
         auto result=sessionMap_.find(udpHeaderPoint->sessionId_);
         if (result != sessionMap_.end()) {
-            std::shared_ptr<session>sessionPtr=result->second;
+            std::unique_ptr<session,sessionDeleter>&sessionPtr=result->second;
             sessionPtr->inputToKcp(udpHeaderPoint->data_,len-sessionIdSize);
         }
         receiveUdpMessageFromRemoteServer();

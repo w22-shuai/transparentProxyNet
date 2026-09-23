@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16.3)
-project(client CXX)
+project(remoteServer CXX)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -26,12 +26,12 @@ find_package(kcp CONFIG REQUIRED)
 
 
 
-add_executable(client.exe
+add_executable(remoteServer
         ${sourceCode}
         main.cpp)
 
 
-target_link_libraries(client.exe PRIVATE
+target_link_libraries(remoteServer PRIVATE
         kcp::kcp
         absl::flat_hash_map
         spdlog::spdlog

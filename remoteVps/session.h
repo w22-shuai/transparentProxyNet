@@ -3,39 +3,27 @@
 #include "worker.h"
 
 
-class session:public std::enable_shared_from_this<session>{
+class session{
 private:
-
     ikcpcb*kcp_;
     worker *worker_;
     udp::endpoint homeClienEndpoint_;
     tcp::socket targetServerTcpSocket_;
     bool trafficBusy_;//kcp流量控制receiveTcpFromWifiCilentMessage函数
     bool enableToSendToTargetServer_;
-
     static constexpr int bufferSize=2048;
     static constexpr int bufferPaddingSize=128;//用于kcpCallBack函数中
     std::array<uint8_t, bufferSize> *targetServerTcpSocketBuffer_;
     static constexpr int kcpSendWindowHighWaterMark=128;//kcp队列拥堵最大状态
-
     worker::SessionId sessionId_;
     uint32_t currentHeapNumber_;
-
-
     std::deque<std::pair<std::shared_ptr<std::array<uint8_t,bufferSize>>,int>> tcpDataWaitForSendDeque_;
-
     void trySendTcpToTargetServerMessage(std::pair<std::shared_ptr<std::array<uint8_t, bufferSize>>, int> &&pair);
-
     void sendTcpToTargetServerMessage();
-
     void receiveTcpFromTargetServerMessage();
-
     void checkTrafficStatus();
-
     void tryToReadFromKcp();
-
-    int handShakeWithtargetServer(tcp::endpoint &ep);
-
+    void handShakeWithtargetServer(tcp::endpoint &ep);
     static int kcpCallBack(const char *buf, int len, ikcpcb *kcp, void *user);
 
 public:
@@ -64,7 +52,7 @@ public:
     static constexpr int statusAndDataSize=sizeof(statusAndData);
     static_assert(sizeof(statusAndData) == 10, "6字节对齐错误");
 
-
+    bool close_;//当前session是否关闭
 
     cmdStatus currentCmdStatus_;//当前命令状态
 
@@ -74,11 +62,11 @@ public:
     void inputToKcp(void *dataPtr, int len);
     void setSessionId(worker::SessionId &sessionId){sessionId_=sessionId;}
     void start();
+
+
     void closeSession();
-    void driveSessionTimeClock(uint32_t now);
-    void updateTimeToWorkerHeap(uint32_t now);
-    void setHeapIndex(uint32_t idx){currentHeapNumber_=idx;}
+
+    static void doCloseSession(void *current);
+    static uint32_t driveSessionTimeClock(void *current);
     udp::endpoint &getEndPoint(){return homeClienEndpoint_;}
-    uint32_t getHeapIndex() const {return currentHeapNumber_;}
-    std::shared_ptr<session>getSelf(){return shared_from_this();}
 };

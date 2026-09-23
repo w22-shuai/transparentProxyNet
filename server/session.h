@@ -2,13 +2,13 @@
 
 #include "GlobalHeaders.h"
 #include "worker.h"
+#include "../timeWheel/timeWheel.hpp"
 
 
 
 
 
-
-class session:public std::enable_shared_from_this<session>{
+class session{
 private:
 
     std::unique_ptr<worker>& worker_;
@@ -73,19 +73,18 @@ public:
 
     cmdStatus currentCmdStatus_;//当前命令状态
 
+
     session()=delete;
     session(std::unique_ptr<worker> &worker, tcp::socket &&wifiClientSocket);
     ~session();
     void start();
-
     void sendIpAndportToServer();
-
     void closeSession();
-    void driveSessionTimeClock(uint32_t now);
-    void updateTimeToWorkerHeap(uint32_t now);
+
+    static void doCloseSession(void *current);
+
+    static uint32_t driveSessionTimeClock(void *current);
     void setSessionId(worker::SessionId &sessionId){sessionId_=sessionId;};
     void inputToKcp(void *dataPtr, int len);
-    void setHeapIndex(uint32_t idx){currentHeapNumber_=idx;}
-    uint32_t getHeapIndex() const {return currentHeapNumber_;}
-    void setEndPoint(tcp::endpoint &&endpoint){endpoint_=endpoint;}
+
 };

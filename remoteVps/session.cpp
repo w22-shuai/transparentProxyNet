@@ -6,7 +6,7 @@
 
 session::session(worker *worker,udp::endpoint& endpoint,tcp::socket&&targetServerTcpSocket):worker_(worker),
 homeClienEndpoint_(std::move(endpoint)),targetServerTcpSocket_(std::move(targetServerTcpSocket)),
-currentCmdStatus_(cmdStatus::newSession),enableToSendToTargetServer_(false){
+currentCmdStatus_(cmdStatus::newSession),enableToSendToTargetServer_(false),close_(false),trafficBusy_(false){
 kcp_=ikcp_create(1,this);//我们不用kcp自带的令牌,我们自己创建內令机制
     kcp_->output = kcpCallBack;
     ikcp_setmtu(kcp_, 1250);
@@ -26,29 +26,30 @@ kcp_=ikcp_create(1,this);//我们不用kcp自带的令牌,我们自己创建內�
 session::~session() {
     ikcp_release(kcp_);
     worker_->freeMemory(targetServerTcpSocketBuffer_);
+    worker_->freeMemory(this);
 }
 
 void session::start() {
     uint32_t now=worker::getClockMs();
     ikcp_update(kcp_,now);
     uint32_t nextTime=ikcp_check(kcp_,now);//算出真正下一次需要驱动的时间,而不是直接用now入堆
-    worker_->pushNewSessionToHeap(nextTime,shared_from_this());
-    //TODO 是否使用weak_ptr
+    worker_->getTimeWheel().mountTask(this,nextTime);
 }
 
 void session::closeSession() {
-
+    worker_->getTimeWheel().removeTask(this);
 }
 
-
-void session::driveSessionTimeClock(uint32_t now) {
-    ikcp_update(kcp_,now);
-    updateTimeToWorkerHeap(now);
+void session::doCloseSession(void *current) {
+    //时间片跨度不够 直接采用worker上的定时器进行分离
+    //30s以后从map中分离
 }
 
-void session::updateTimeToWorkerHeap(uint32_t now) {
-    uint32_t nextTime = ikcp_check(kcp_, now);
-    worker_->updateSessionToHeap(nextTime, shared_from_this());
+uint32_t session::driveSessionTimeClock(void *current) {
+    uint32_t now=((session*)current)->worker_->getClockMs();
+    ikcp_update(((session*)current)->kcp_,now);
+    uint32_t nextTime = ikcp_check(((session*)current)->kcp_, now);
+    return nextTime - now;
 }
 
 void session::trySendTcpToTargetServerMessage(std::pair<std::shared_ptr<std::array<uint8_t, bufferSize>>,int> &&pair)
@@ -67,11 +68,10 @@ void session::trySendTcpToTargetServerMessage(std::pair<std::shared_ptr<std::arr
 void session::sendTcpToTargetServerMessage() {
     std::pair<std::shared_ptr<std::array<uint8_t,bufferSize>>,int> &front=
       tcpDataWaitForSendDeque_.front();
-    std::shared_ptr<session> self=shared_from_this();
     LogD("发送数据-->{}",front.second-cmdStatusSize);
     asio::async_write(targetServerTcpSocket_,
         asio::buffer(((statusAndData*)front.first->data())->assistPoint,front.second-cmdStatusSize),
-        [this,self](boost::system::error_code ec,size_t byteHadSend) {
+        [this](boost::system::error_code ec,size_t byteHadSend) {
             tcpDataWaitForSendDeque_.pop_front();
             if (ec) {
                 LogE("发送数据到目标服务器失败-->{}",ec.what());
@@ -86,11 +86,10 @@ void session::sendTcpToTargetServerMessage() {
 }
 
 void session::receiveTcpFromTargetServerMessage() {
-    std::shared_ptr<session> self=shared_from_this();
     //(char*)防止偏移出问题
     targetServerTcpSocket_.async_read_some(
         asio::buffer((uint8_t*)targetServerTcpSocketBuffer_+cmdStatusSize,bufferSize-cmdStatusSize),
-        [this,self](boost::system::error_code ec,size_t byteHadRead) {
+        [this](boost::system::error_code ec,size_t byteHadRead) {
             if (ec) {
                 LogE("出现问题-->{}",ec.what());
                 return;
@@ -162,12 +161,11 @@ void session::tryToReadFromKcp() {
             default:
                 break;
         }
-
     }
 
 }
 
-int session::handShakeWithtargetServer(tcp::endpoint &ep) {
+void session::handShakeWithtargetServer(tcp::endpoint &ep) {
     targetServerTcpSocket_.async_connect(ep,[this](boost::system::error_code ec) {
         if (ec) {
         LogE("目标服务器tcp握手失败");
@@ -185,7 +183,6 @@ int session::handShakeWithtargetServer(tcp::endpoint &ep) {
      });
 }
 
-
 int session::kcpCallBack(const char *buf, int len, ikcpcb *kcp, void *user) {
     session* currentSession=(session*)user;
     //內令设置
@@ -198,6 +195,7 @@ int session::kcpCallBack(const char *buf, int len, ikcpcb *kcp, void *user) {
     len=currentSession->worker_->
     getFastAesGcm().doEncrypt(assistPoint,len+worker::sessionIdSize);
     currentSession->worker_->tryTosendUdpMessageToRemoteServer(
-        std::make_pair(currentSession->getSelf(),std::make_pair(bufferPtr,len)));
+        std::make_pair(currentSession->homeClienEndpoint_,std::make_pair(bufferPtr,len)));
+        //切记不能使用引用
     return 0;
 }

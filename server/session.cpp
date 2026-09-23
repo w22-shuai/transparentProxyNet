@@ -19,20 +19,21 @@ trafficBusy_(false),currentCmdStatus_(cmdStatus::newSession){
     wifiClientSocketBuffer_=worker_->getCPtrFunc(bufferSize);
     //remoteServerSocketBuffer_=worker_->getCPtrFunc(bufferSize);
 
-
 }
 
 session::~session() {
     ikcp_release(kcp_);
     worker_->freeMemory(wifiClientSocketBuffer_);
+    worker_->freeMemory(this);
     //worker_->freeMemory(remoteServerSocketBuffer_);
 }
 
 void session::start() {
     uint32_t now=worker::getClockMs();
+    LogD("调试信息");
     ikcp_update(kcp_,now);
     uint32_t nextTime=ikcp_check(kcp_,now);//算出真正下一次需要驱动的时间,而不是直接用now入堆
-    worker_->pushNewSessionToHeap(nextTime,shared_from_this());
+    worker_->getTimeWheel().mountTask(this,nextTime);
     //TODO 是否使用weak_ptr
     sockaddr_in orig_dst{};
     socklen_t addrlen = sizeof(orig_dst);
@@ -54,7 +55,6 @@ void session::start() {
         perror("getsockopt SO_ORIGINAL_DST failed");
         endpoint_ = wifiClientSocket_.local_endpoint();
     }
-
     sendIpAndportToServer();
 }
 
@@ -71,19 +71,22 @@ void session::sendIpAndportToServer() {
 
 void session::closeSession() {
 
-
+    worker_->getTimeWheel().removeTask(this);
 }
 
-void session::driveSessionTimeClock(uint32_t now) {
-    ikcp_update(kcp_,now);
-    updateTimeToWorkerHeap(now);
-    //worker通过调用这个回调函数来驱动kcp
+void session::doCloseSession(void *current) {
+    //时间片跨度不够 直接采用worker上的定时器进行分离
+    //30s以后从map中分离
 }
 
-void session::updateTimeToWorkerHeap(uint32_t now) {
-    uint32_t nextTime = ikcp_check(kcp_, now);
-    worker_->updateSessionToHeap(nextTime, shared_from_this());
+uint32_t session::driveSessionTimeClock(void *current) {
+    //这个回调函数来驱动kcp
+    uint32_t now=((session*)current)->worker_->getClockMs();
+    ikcp_update(((session*)current)->kcp_,now);
+    uint32_t nextTime = ikcp_check(((session*)current)->kcp_, now);
+    return nextTime - now;
 }
+
 
 void session::trySendTcpToWifiClientMessage(std::pair<std::shared_ptr<std::array<uint8_t,bufferSize>>,int>&& pair) {
     bool isEmpty=tcpDataWaitForSendDeque_.empty();
@@ -96,11 +99,10 @@ void session::trySendTcpToWifiClientMessage(std::pair<std::shared_ptr<std::array
 void session::sendTcpToWifiClientMessage() {
     std::pair<std::shared_ptr<std::array<uint8_t,bufferSize>>,int> &front=
       tcpDataWaitForSendDeque_.front();
-    std::shared_ptr<session> self=shared_from_this();
     LogD("调试信息-->{}",front.second);
     asio::async_write(wifiClientSocket_,
         asio::buffer(((statusAndData*)front.first->data())->assistPoint,front.second-cmdStatusSize),
-        [this,self](boost::system::error_code ec,size_t byteHadSend) {
+        [this](boost::system::error_code ec,size_t byteHadSend) {
             tcpDataWaitForSendDeque_.pop_front();
             if (ec) {
                 LogE("回写WiFi客户端失败");
@@ -115,10 +117,9 @@ void session::sendTcpToWifiClientMessage() {
 }
 
 void session::receiveTcpFromWifiCilentMessage() {
-    std::shared_ptr<session> self=shared_from_this();
     wifiClientSocket_.async_read_some(
         asio::buffer((char*)wifiClientSocketBuffer_+cmdStatusSize,bufferSize-cmdStatusSize),
-        [this,self](boost::system::error_code ec,size_t byteHadRead) {
+        [this](boost::system::error_code ec,size_t byteHadRead) {
             LogD("调试信息-->{}",byteHadRead);
             if (ec) {
                 LogE("出现问题");

@@ -1,13 +1,19 @@
 #pragma once
 #include "GlobalHeaders.h"
 #include "../memoryPool/memoryPool.h"
-#include "../priorityHeap/priorityHeap.hpp"
+#include "../timeWheel/timeWheel.hpp"
 #include "AES.h"
 
 class session;
 class server;
 
 class worker {    //一个worker一个ioCtx;
+public:
+    class sessionDeleter{
+    public:
+        void operator()(session *p);
+    };
+
 private:
     std::shared_ptr<std::thread> threadPtr_;
     int remoteServerPort_;
@@ -15,21 +21,13 @@ private:
     asio::io_context ioCtx_;
     asio::executor_work_guard<asio::io_context::executor_type> workGuard_;
     udp::socket remoteServerSocker_;
-    absl::flat_hash_map<std::array<uint8_t,16>,std::shared_ptr<session>> sessionMap_;//worker线程哈希表
+    absl::flat_hash_map<std::array<uint8_t,16>,std::unique_ptr<session,sessionDeleter>> sessionMap_;//worker线程哈希表
     static constexpr int bufferSize=2048;
     std::array<uint8_t,bufferSize>* udpReceiveBuffer;
     FastAesGcmProcessor fastAes;
-    struct KcpUpdateNode {
-        uint32_t dueAtMs;
-        std::shared_ptr<session> sessionPtr;
+    timeWheel<session> timeWheel_;
 
-        bool operator<(const KcpUpdateNode &other) const {
-            return static_cast<int32_t>(dueAtMs - other.dueAtMs) < 0;
-        }
-        void setHeapIndex(uint32_t idx);
-        uint32_t getHeapIndex() const;
-    };
-    priorityHeap<KcpUpdateNode> sessionHeap_;
+
     std::deque<std::pair<std::shared_ptr<std::array<uint8_t,2048>>,int>> udpSocketWaitForSendDeque_;
     //udp待发送队列;
     asio::steady_timer kcpUpdateTimer_;
@@ -37,7 +35,7 @@ private:
     server&server_;
 
 
-    void removeSessionFromHeap(uint32_t index);
+
     void removeSessionFromHashMap(std::array<uint8_t, 16> sessionId);
     void cleanMemoryBlock();
 
@@ -56,20 +54,19 @@ public:
     worker()=delete;
     ~worker();
     void start();
+
+    void startTimeWheel();
+
     SessionId getSessionId();
     static uint32_t getClockMs();
     asio::io_context& getIoCtx(){return ioCtx_;};
-    void registerSession(std::shared_ptr<session> &sessionPtr);//++sessionSize
+    timeWheel<session>& getTimeWheel(){return timeWheel_;}
+    void registerSession(std::unique_ptr<session, sessionDeleter> &sessionPtr);//++sessionSize
     void tryTosendUdpMessageToRemoteServer(std::pair<std::shared_ptr<std::array<uint8_t,2048>>,int>&&pair);
     void sendUdpMessageToRemoteServer();
-    void rearmKcpUpdateTimer();
-    void onKcpUpdateTimer(const boost::system::error_code &ec);
     void receiveUdpMessageFromRemoteServer();
     void freeMemory(void*);
-    void pushNewSessionToHeap(uint32_t time, std::shared_ptr<session> &&sessionPtr);
-    void updateSessionToHeap(uint32_t newDueAtMs, const std::shared_ptr<session> &sessionPtr);
-
-    void removeSession(const std::shared_ptr<session> &sessionPtr);
+    void removeSession(session* sessionPtr);
 
     std::array<uint8_t,2048> * getMemory(int memorySize);
     FastAesGcmProcessor& getFastAesGcm(){return fastAes;}
