@@ -62,12 +62,11 @@ void server::work() {
     acceptor_.async_accept(ioCtx,[this,&ioCtx,&workerPtr]
         (boost::system::error_code ec,tcp::socket socket) mutable{
         if (!ec) {
-
             //session可以在主线程创建但是后续处理必须依靠子线程,因此Post发往子线程
             ++workerPtr->sessionSize;//可能会出现线程并发量过大引起的负载不均衡问题,所以移到这里
-            session* Ptr=new ((session*)workerPtr->getTimeWheel().registerTask(workerPtr->
-                    getCPtrFunc(timeWheel<session>::structTaskSize_))) session(workerPtr,std::move(socket));
-            asio::post(ioCtx.get_executor(),[&workerPtr,Ptr]() mutable{
+            asio::post(ioCtx.get_executor(),[&workerPtr,socket=std::move(socket)]() mutable{
+                session* Ptr=new ((session*)workerPtr->getTimeWheel().registerTask(workerPtr->
+            getCPtrFunc(timeWheel<session>::structTaskSize_))) session(workerPtr,std::move(socket));
               std::unique_ptr<session,worker::sessionDeleter> sessionPtr(Ptr);
               workerPtr->registerSession(sessionPtr);
     });

@@ -18,7 +18,6 @@ void worker::start() {
         listen();
         ++server_.sonThreadStatus_;
         timeWheel_.operatorFunction_.ctwCallBack_=session::driveSessionTimeClock;
-        timeWheel_.operatorFunction_.rtCallBack_=session::doCloseSession;
         startTimeWheel();
         server_.getConditionVariable().notify_one();
         ioCtx_.run();
@@ -61,6 +60,11 @@ void worker::listen() {
         if (ec) {
         LogE("出现错误");
         listen();
+        return;
+        }
+        if (bytesHadRead == 0) {
+            listen();
+            return; // 空包同样不处理
         }
         //delieverMessageFromClientHome
         int len=fastAes.doDecrypt(udpReceiveBuffer,bytesHadRead);

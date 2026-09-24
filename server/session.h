@@ -27,13 +27,12 @@ private:
     static constexpr int keyAndIvOffSet =44;
     std::array<uint8_t, bufferSize> *wifiClientSocketBuffer_;
     //TODO remoteServerSocketBuffer_是否被需要
-    uint32_t currentHeapNumber_;
 
     std::deque<std::pair<std::shared_ptr<std::array<uint8_t,2048>>,int>> tcpDataWaitForSendDeque_;
 
     static constexpr int kcpSendWindowHighWaterMark=128;//kcp队列拥堵最大状态
     bool trafficBusy_;//kcp流量控制receiveTcpFromWifiCilentMessage函数
-
+    bool sessionClose_;
     //由于单udp端口无连接性,需要在內令中设置id通过红黑树来遍历查询
 
     void receiveTcpFromWifiCilentMessage();
@@ -80,9 +79,7 @@ public:
     void start();
     void sendIpAndportToServer();
     void closeSession();
-
-    static void doCloseSession(void *current);
-
+    static void doCloseSession(void *memoryPtr);
     static uint32_t driveSessionTimeClock(void *current);
     void setSessionId(worker::SessionId &sessionId){sessionId_=sessionId;};
     void inputToKcp(void *dataPtr, int len);

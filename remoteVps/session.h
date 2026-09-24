@@ -18,6 +18,7 @@ private:
     worker::SessionId sessionId_;
     uint32_t currentHeapNumber_;
     std::deque<std::pair<std::shared_ptr<std::array<uint8_t,bufferSize>>,int>> tcpDataWaitForSendDeque_;
+    bool sessionClose_;
     void trySendTcpToTargetServerMessage(std::pair<std::shared_ptr<std::array<uint8_t, bufferSize>>, int> &&pair);
     void sendTcpToTargetServerMessage();
     void receiveTcpFromTargetServerMessage();
@@ -52,7 +53,6 @@ public:
     static constexpr int statusAndDataSize=sizeof(statusAndData);
     static_assert(sizeof(statusAndData) == 10, "6字节对齐错误");
 
-    bool close_;//当前session是否关闭
 
     cmdStatus currentCmdStatus_;//当前命令状态
 
@@ -66,7 +66,7 @@ public:
 
     void closeSession();
 
-    static void doCloseSession(void *current);
+    static void doCloseSession(void *memoryPtr);
     static uint32_t driveSessionTimeClock(void *current);
     udp::endpoint &getEndPoint(){return homeClienEndpoint_;}
 };

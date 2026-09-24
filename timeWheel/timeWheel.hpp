@@ -1,7 +1,7 @@
 #pragma once
 #include <array>
-#include <memory>
-
+#include <iostream>
+#include <chrono>
 
 
 
@@ -25,7 +25,7 @@ private:
         using doCurrentTimeWheelCallBack=uint32_t (*)(void*);
         using doremoveTaskCallBack=void (*)(void*);
         doCurrentTimeWheelCallBack ctwCallBack_;
-        doremoveTaskCallBack rtCallBack_;
+
     };
 
     static constexpr int timeWheelLength_=1000;//12000字节 10kb左右 总长3000ms
@@ -45,21 +45,26 @@ public:
     timeWheel():currentTaskNumber_(0) {
 
     };
-    void removeTask(T* node) {
+    task* removeTask(T* node) {
         task* taskPoint=(task*)((char*)node-sizeof(typename task::assistStruct));
+
         //若taskPoint->assistStruct_.ahead_->assistStruct_.next_为首指针显然会出问题,因此必须对齐next
         taskPoint->assistStruct_.ahead_->assistStruct_.next_=taskPoint->assistStruct_.next_;
-        if (taskPoint->assistStruct_.next_) {          // 补上判空,尾节点时不需要更新"下一个"的ahead_
-            taskPoint->assistStruct_.next_->assistStruct_.ahead_=taskPoint->assistStruct_.ahead_;
-        }
+         if (taskPoint->assistStruct_.next_) {          // 补上判空,尾节点时不需要更新"下一个"的ahead_
+             taskPoint->assistStruct_.next_->assistStruct_.ahead_=taskPoint->assistStruct_.ahead_;
+         }
         //断链准备回收这块内存
-        operatorFunction_.ctwCallBack_(&taskPoint->node_);//兹定60s后销毁map里的session,算是TIME_WAIT
+        taskPoint->assistStruct_.next_=nullptr;
+        taskPoint->assistStruct_.ahead_=nullptr;
+        return taskPoint;
     }
-    void* registerTask(void*memoryPoint) {
+    T* registerTask(void*memoryPoint) {
         //传入内存池内存
         //返回期望T的类型指针
-         task* taskPoint=(task*)memoryPoint;
-         return  &taskPoint->node_;
+        task* taskPoint=(task*)memoryPoint;
+        taskPoint->assistStruct_.next_=nullptr;
+        taskPoint->assistStruct_.ahead_=nullptr;
+        return  &taskPoint->node_;
     }
     void mountTask(T* node,uint32_t next) {
         int ticks = next / deltaTime_;
@@ -69,6 +74,7 @@ public:
         int targetTaskNumber_ = (currentTaskNumber_ + ticks) % timeWheelLength_;
         task* taskPoint=timeSegmentList_[targetTaskNumber_].next_;
         task* currentTaskPoint=(task*)((char*)node-sizeof(typename task::assistStruct));
+
         if (taskPoint==nullptr) {
             currentTaskPoint->assistStruct_.next_=taskPoint;
             currentTaskPoint->assistStruct_.ahead_=(task*)&timeSegmentList_[targetTaskNumber_];
@@ -83,17 +89,29 @@ public:
     void doCurrentTimeWheel() {
         task*currentTask=timeSegmentList_[currentTaskNumber_].next_;
         timeSegmentList_[currentTaskNumber_].next_=nullptr;
+        auto start_time = std::chrono::steady_clock::now();
+        task*assistpoint=currentTask;
         while (currentTask!=nullptr) {
-            task*assistPoint=currentTask->assistStruct_.next_;
-            int nextTime=operatorFunction_.ctwCallBack_(&currentTask->node_);
+            task*Point=currentTask->assistStruct_.next_;
+            currentTask->assistStruct_.next_ = nullptr;
+            currentTask->assistStruct_.ahead_ = nullptr;
+            uint32_t nextTime=operatorFunction_.ctwCallBack_(&currentTask->node_);
             if (nextTime > 0) { // 通常返回0代表不再定时，需要判断
                 mountTask(&currentTask->node_, nextTime);
             }
-            currentTask=assistPoint;
+            currentTask=Point;
         }
         ++currentTaskNumber_;
         if (currentTaskNumber_>=1000) {
             currentTaskNumber_=0;
         }//回到初始时间片
+        auto end_time = std::chrono::steady_clock::now();
+
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
+
+       if (assistpoint) {
+           LogD("执行时长-->{}",duration);
+       }
+
     }
 };

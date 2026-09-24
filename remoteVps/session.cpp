@@ -6,7 +6,8 @@
 
 session::session(worker *worker,udp::endpoint& endpoint,tcp::socket&&targetServerTcpSocket):worker_(worker),
 homeClienEndpoint_(std::move(endpoint)),targetServerTcpSocket_(std::move(targetServerTcpSocket)),
-currentCmdStatus_(cmdStatus::newSession),enableToSendToTargetServer_(false),close_(false),trafficBusy_(false){
+currentCmdStatus_(cmdStatus::newSession),enableToSendToTargetServer_(false),trafficBusy_(false),
+sessionClose_(false){
 kcp_=ikcp_create(1,this);//我们不用kcp自带的令牌,我们自己创建內令机制
     kcp_->output = kcpCallBack;
     ikcp_setmtu(kcp_, 1250);
@@ -26,7 +27,7 @@ kcp_=ikcp_create(1,this);//我们不用kcp自带的令牌,我们自己创建內�
 session::~session() {
     ikcp_release(kcp_);
     worker_->freeMemory(targetServerTcpSocketBuffer_);
-    worker_->freeMemory(this);
+
 }
 
 void session::start() {
@@ -37,19 +38,32 @@ void session::start() {
 }
 
 void session::closeSession() {
-    worker_->getTimeWheel().removeTask(this);
+
+    if (!sessionClose_) {
+        //确保只回调一次;
+        targetServerTcpSocket_.close();
+        sessionClose_=true;
+        void*memoryPtr=worker_->getTimeWheel().removeTask(this);
+        doCloseSession(memoryPtr);
+    }
 }
 
-void session::doCloseSession(void *current) {
+void session::doCloseSession(void *memoryPtr) {
     //时间片跨度不够 直接采用worker上的定时器进行分离
     //30s以后从map中分离
 }
 
 uint32_t session::driveSessionTimeClock(void *current) {
-    uint32_t now=((session*)current)->worker_->getClockMs();
-    ikcp_update(((session*)current)->kcp_,now);
+    uint32_t now = ((session*)current)->worker_->getClockMs();
+    ikcp_update(((session*)current)->kcp_, now);
+
     uint32_t nextTime = ikcp_check(((session*)current)->kcp_, now);
-    return nextTime - now;
+    int32_t diff = (int32_t)(nextTime - now);
+    if (diff <= 0) {
+        return 1;
+    }
+
+    return (uint32_t)diff;
 }
 
 void session::trySendTcpToTargetServerMessage(std::pair<std::shared_ptr<std::array<uint8_t, bufferSize>>,int> &&pair)
@@ -68,16 +82,20 @@ void session::trySendTcpToTargetServerMessage(std::pair<std::shared_ptr<std::arr
 void session::sendTcpToTargetServerMessage() {
     std::pair<std::shared_ptr<std::array<uint8_t,bufferSize>>,int> &front=
       tcpDataWaitForSendDeque_.front();
-    LogD("发送数据-->{}",front.second-cmdStatusSize);
+    //LogD("发送数据-->{}",front.second-cmdStatusSize);
     asio::async_write(targetServerTcpSocket_,
         asio::buffer(((statusAndData*)front.first->data())->assistPoint,front.second-cmdStatusSize),
         [this](boost::system::error_code ec,size_t byteHadSend) {
-            tcpDataWaitForSendDeque_.pop_front();
+            if (sessionClose_) {
+                tcpDataWaitForSendDeque_.clear();
+            }
             if (ec) {
                 LogE("发送数据到目标服务器失败-->{}",ec.what());
                 closeSession();
                 return;
             }
+
+            tcpDataWaitForSendDeque_.pop_front();
             if (!tcpDataWaitForSendDeque_.empty()) {
                 sendTcpToTargetServerMessage();
             }
@@ -92,6 +110,7 @@ void session::receiveTcpFromTargetServerMessage() {
         [this](boost::system::error_code ec,size_t byteHadRead) {
             if (ec) {
                 LogE("出现问题-->{}",ec.what());
+                closeSession();
                 return;
             }
             if (byteHadRead==0) {
@@ -118,6 +137,9 @@ void session::checkTrafficStatus() {
 }
 
 void session::inputToKcp(void*dataPtr, int len) {
+    if (sessionClose_) {
+        return; // session已关闭,直接丢弃,不再喂给kcp
+    }
     ikcp_input(kcp_,(const char *)dataPtr,len);
     tryToReadFromKcp();
 
@@ -186,6 +208,7 @@ void session::handShakeWithtargetServer(tcp::endpoint &ep) {
 int session::kcpCallBack(const char *buf, int len, ikcpcb *kcp, void *user) {
     session* currentSession=(session*)user;
     //內令设置
+    LogD("发送数据-->{}",len);
     std::shared_ptr<std::array<uint8_t, bufferSize>> bufferPtr=
     currentSession->worker_->getSharedPtrFunc(len+bufferPaddingSize);
     char* const  assistPoint=(char*)bufferPtr->data();

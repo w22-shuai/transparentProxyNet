@@ -9,8 +9,8 @@
 
 
 session::session(std::unique_ptr<worker> &worker,tcp::socket &&wifiClientSocket ):
-worker_(worker),wifiClientSocket_(std::move(wifiClientSocket)),currentHeapNumber_(0),
-trafficBusy_(false),currentCmdStatus_(cmdStatus::newSession){
+worker_(worker),wifiClientSocket_(std::move(wifiClientSocket)),
+trafficBusy_(false),currentCmdStatus_(cmdStatus::newSession),sessionClose_(false){
     kcp_=ikcp_create(1,this);//我们不用kcp自带的令牌,我们自己创建內令机制
     kcp_->output = kcpCallBack;
     ikcp_setmtu(kcp_, 1250);
@@ -24,13 +24,12 @@ trafficBusy_(false),currentCmdStatus_(cmdStatus::newSession){
 session::~session() {
     ikcp_release(kcp_);
     worker_->freeMemory(wifiClientSocketBuffer_);
-    worker_->freeMemory(this);
     //worker_->freeMemory(remoteServerSocketBuffer_);
 }
 
 void session::start() {
     uint32_t now=worker::getClockMs();
-    LogD("调试信息");
+    //LogD("调试信息");
     ikcp_update(kcp_,now);
     uint32_t nextTime=ikcp_check(kcp_,now);//算出真正下一次需要驱动的时间,而不是直接用now入堆
     worker_->getTimeWheel().mountTask(this,nextTime);
@@ -49,7 +48,7 @@ void session::start() {
 
         endpoint_ = tcp::endpoint(addr, port);
 
-        LogD("成功获取真实目标: " + endpoint_.address().to_string() + ":" + std::to_string(port));
+        //LogD("成功获取真实目标: " + endpoint_.address().to_string() + ":" + std::to_string(port));
     } else {
         // 如果失败（比如直接连10950端口，没有经过NAT），退回到本地获取
         perror("getsockopt SO_ORIGINAL_DST failed");
@@ -71,20 +70,29 @@ void session::sendIpAndportToServer() {
 
 void session::closeSession() {
 
-    worker_->getTimeWheel().removeTask(this);
+    if (!sessionClose_) {
+        //确保只回调一次;
+        wifiClientSocket_.close();
+        sessionClose_=true;
+        void*memoryPtr=worker_->getTimeWheel().removeTask(this);
+        doCloseSession(memoryPtr);
+    }
 }
 
-void session::doCloseSession(void *current) {
+void session::doCloseSession(void *memoryPtr) {
     //时间片跨度不够 直接采用worker上的定时器进行分离
-    //30s以后从map中分离
+    //兹定30s后销毁map里的session,算是TIME_WAIT
 }
 
 uint32_t session::driveSessionTimeClock(void *current) {
-    //这个回调函数来驱动kcp
-    uint32_t now=((session*)current)->worker_->getClockMs();
-    ikcp_update(((session*)current)->kcp_,now);
+    uint32_t now = ((session*)current)->worker_->getClockMs();
+    ikcp_update(((session*)current)->kcp_, now);
     uint32_t nextTime = ikcp_check(((session*)current)->kcp_, now);
-    return nextTime - now;
+    int32_t diff = (int32_t)(nextTime - now);
+    if (diff <= 0) {
+        return 1;
+    }
+    return (uint32_t)diff;
 }
 
 
@@ -99,11 +107,14 @@ void session::trySendTcpToWifiClientMessage(std::pair<std::shared_ptr<std::array
 void session::sendTcpToWifiClientMessage() {
     std::pair<std::shared_ptr<std::array<uint8_t,bufferSize>>,int> &front=
       tcpDataWaitForSendDeque_.front();
-    LogD("调试信息-->{}",front.second);
+    //LogD("调试信息-->{}",front.second);
     asio::async_write(wifiClientSocket_,
         asio::buffer(((statusAndData*)front.first->data())->assistPoint,front.second-cmdStatusSize),
         [this](boost::system::error_code ec,size_t byteHadSend) {
             tcpDataWaitForSendDeque_.pop_front();
+            if (sessionClose_) {
+                tcpDataWaitForSendDeque_.clear();
+            }
             if (ec) {
                 LogE("回写WiFi客户端失败");
                 closeSession();
@@ -120,9 +131,10 @@ void session::receiveTcpFromWifiCilentMessage() {
     wifiClientSocket_.async_read_some(
         asio::buffer((char*)wifiClientSocketBuffer_+cmdStatusSize,bufferSize-cmdStatusSize),
         [this](boost::system::error_code ec,size_t byteHadRead) {
-            LogD("调试信息-->{}",byteHadRead);
+            //LogD("调试信息-->{}",byteHadRead);
             if (ec) {
-                LogE("出现问题");
+                LogE("套接字关闭");
+                closeSession();
                 return;
             }
             if (byteHadRead==0) {
@@ -148,6 +160,9 @@ void session::checkTrafficStatus() {
 }
 
 void session::inputToKcp(void*dataPtr,int len) {
+    if (sessionClose_) {
+        return; // session已关闭,直接丢弃,不再喂给kcp
+    }
     ikcp_input(kcp_,(const char *)dataPtr,len);
     tryToReadFromKcp();
     //此处应当可以配合receiveTcpFromWifiCilentMessage函数了
@@ -191,7 +206,7 @@ int session::kcpCallBack(const char *buf, int len, ikcpcb *kcp, void *user) {
     //len<1250;
     session* currentSession=(session*)user;
     //內令设置
-    LogD("调试信息-->{}",len);
+    //LogD("调试信息-->{}",len);
     std::shared_ptr<std::array<uint8_t, bufferSize>> bufferPtr=
     currentSession->worker_->getSharedPtrFunc(len+bufferPaddingSize);
     char* const  assistPoint=(char*)bufferPtr->data();

@@ -37,7 +37,6 @@ void worker::start() {
             //LogD("子线程准备完毕");
             ++server_.sonThreadStatus_;
             timeWheel_.operatorFunction_.ctwCallBack_=session::driveSessionTimeClock;
-            timeWheel_.operatorFunction_.rtCallBack_=session::doCloseSession;
             startTimeWheel();//时间片启动
             server_.getConditionVariable().notify_one();
             receiveUdpMessageFromRemoteServer();
